@@ -3,10 +3,10 @@ tiff66 is a Go library for encoding and decoding TIFF files. It can be used to e
 
 For documentation, see https://godoc.org/github.com/garyhouston/tiff66.
 
-##Notes and limitations
+## Notes and limitations
 Data is encoded and decoded from Go byte slices, so is limited to files that can fit in available memory. TIFF files can be up to 4GB in size. Reading and rewriting a file will require space for two byte slices.
 
-Data is unpacked into structures that contain pointers to the raw data in the original byte slices. This saves copying and memory use, but modifying the data in one place will also modify it in the other.
+Data is unpacked into structures that contain pointers to the raw data in the original byte slices. This saves copying and memory use, but modifying the data in one place will also modify it in the other. The buffer could be modified in-place if only simple changes to field data are made.
 
 The tiff66print program prints the IFDs (image file directories) and fields of a TIFF file.
 
