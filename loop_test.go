@@ -18,8 +18,8 @@ func TestLoop(t *testing.T) {
 	ifd2.Fields = make([]Field, 1)
 	ifd2.Fields[0] = ifd1.Fields[0]
 	ifdsize := ifd1.Size() + ifd1.DataSize(order)
-	buf := make([]byte, 8+2*ifdsize)
-	ifd1pos := uint32(8)
+	buf := make([]byte, HeaderSize()+2*ifdsize)
+	ifd1pos := HeaderSize()
 	ifd2pos := ifd1pos + ifdsize
 	PutHeader(buf, order, ifd1pos)
 	_, err := ifd1.Put(buf, order, ifd1pos, nil, ifd2pos)

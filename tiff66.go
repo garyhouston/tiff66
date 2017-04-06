@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 )
 
 type Type uint8
@@ -200,7 +201,7 @@ const (
 	ImageSourceData             = 0x935C // Supplement 2
 )
 
-// Mapping to names of tags lists above.
+// Mappings from TIFF tags to strings.
 var TagNames = map[Tag]string{
 	NewSubfileType:              "NewSubfileType",
 	SubfileType:                 "SubfileType",
@@ -655,6 +656,12 @@ func (ifd IFD_T) TotalSize(order binary.ByteOrder) uint32 {
 	return ifd.Size() + ifd.DataSize(order)
 }
 
+// Return the size of a TIFF header.
+func HeaderSize() uint32 {
+	// byte order (2 bytes), magic number (2 bytes), IFD position (4 bytes)
+	return 8
+}
+	
 // Try to read a TIFF header from a slice. Returns an indication of
 // validity, the byte order, and the position of the 0th IFD.
 func GetHeader(buf []byte) (bool, binary.ByteOrder, uint32) {
@@ -896,6 +903,45 @@ func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []I
 	}
 	order.PutUint32(buf[pos:], nextptr)
 	return datapos, nil
+}
+
+// Add some fields to an IFD.
+func (ifd *IFD_T) AddFields(fields []Field) {
+	addLen := len(fields)
+	if addLen == 0 {
+		return
+	}
+	curLen := len(ifd.Fields)
+	newLen := curLen + addLen
+	var newFields []Field
+	if cap(ifd.Fields) < newLen {
+		newFields = make([]Field, newLen)
+		copy(newFields, ifd.Fields)
+	} else {
+		newFields = ifd.Fields[:curLen + addLen]
+	}
+	for i := 0; i < addLen; i++ {
+		newFields[curLen + i] = fields[i]
+	}
+	sort.Slice(newFields, func(i, j int) bool { return newFields[i].Tag < newFields[j].Tag })
+	ifd.Fields = newFields
+}
+
+// Delete some fields from an IFD.
+func (ifd *IFD_T) DeleteFields(tags []Tag) {
+	shift := 0
+	numFields := len(ifd.Fields)
+	for i := 0; i < numFields; i++ {
+		if shift > 0 {
+			ifd.Fields[i - shift] = ifd.Fields[i]
+		}
+		for _, t := range tags {
+			if ifd.Fields[i].Tag == t {
+				shift++
+			}
+		}
+	}
+	ifd.Fields = ifd.Fields[:numFields - shift]
 }
 
 // IFD Tag namespace.
