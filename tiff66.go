@@ -1141,7 +1141,6 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 		next = Align(next)
 		subifds[i].Tag = node.SubIFDs[i].Field.Tag
 		subifds[i].Pos = next
-		fmt.Println("putting subifd at", next)
 		next, err = node.SubIFDs[i].Node.PutIFDTree(buf, next, order)
 		if err != nil {
 			return 0, err
@@ -1156,12 +1155,10 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 			return 0, err
 		}
 	}
-	fmt.Println("putting node at", pos)
 	until, err := node.IFD.Put(buf, order, pos, subifds, nodepos)
 	if err != nil {
 		return 0, err
 	}
-	fmt.Println("next after node at", until)
 	return next, nil
 }
 
