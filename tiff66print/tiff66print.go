@@ -23,7 +23,7 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder) {
 		names = tiff.TagNames
 	}
 	for i := 0; i < len(fields); i++ {
-		fields[i].Print(order, names, 10)
+		fields[i].Print(order, names, 20)
 	}
 	imageData := node.IFD.ImageData
 	fmt.Println()
