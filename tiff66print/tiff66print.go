@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	tiff "github.com/garyhouston/tiff66"
 	"io/ioutil"
@@ -9,7 +10,7 @@ import (
 	"os"
 )
 
-func printNode(node *tiff.IFDNode, order binary.ByteOrder) {
+func printNode(node *tiff.IFDNode, order binary.ByteOrder, length uint32) {
 	fmt.Println()
 	fields := node.IFD.Fields
 	fmt.Printf("%s IFD with %d ", node.Space.Name(), len(fields))
@@ -23,7 +24,7 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder) {
 		names = tiff.TagNames
 	}
 	for i := 0; i < len(fields); i++ {
-		fields[i].Print(order, names, 20)
+		fields[i].Print(order, names, length)
 	}
 	imageData := node.IFD.ImageData
 	fmt.Println()
@@ -36,21 +37,24 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder) {
 		}
 	}
 	for i := 0; i < len(node.SubIFDs); i++ {
-		printNode(node.SubIFDs[i].Node, order)
+		printNode(node.SubIFDs[i].Node, order, length)
 	}
 	if node.Next != nil {
-		printNode(node.Next, order)
+		printNode(node.Next, order, length)
 	}
 }
 
 // Read and diplay all the IFDs of a TIFF file, including any private IFDs that can be
 // detected.
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s file\n", os.Args[0])
+	var length uint
+	flag.UintVar(&length, "m", 20, "maximum values to print or 0 for no limit")
+	flag.Parse()
+	if flag.NArg() != 1 {
+		fmt.Printf("Usage: %s [-m max values] file\n", os.Args[0])
 		return
 	}
-	buf, err := ioutil.ReadFile(os.Args[1])
+	buf, err := ioutil.ReadFile(flag.Arg(0))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,5 +66,5 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	printNode(root, order)
+	printNode(root, order, uint32(length))
 }
