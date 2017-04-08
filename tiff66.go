@@ -557,7 +557,12 @@ func (f Field) Print(order binary.ByteOrder, tagNames map[Tag]string, limit uint
 	}
 	switch {
 	case f.Type == ASCII:
-		fmt.Printf(" %q\n", f.ASCII())
+		str := f.ASCII()
+		if len(str) > int(limit) {
+			fmt.Printf(" %q...\n", str[:limit])
+		} else {
+			fmt.Printf(" %q\n", str)
+		}
 	case f.Type.IsRational():
 		ratPrinter := func(f Field, i uint32, order binary.ByteOrder) {
 			num, denom := f.AnyRational(i, order)
