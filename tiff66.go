@@ -1155,7 +1155,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 			return 0, err
 		}
 	}
-	until, err := node.IFD.Put(buf, order, pos, subifds, nodepos)
+	_, err = node.IFD.Put(buf, order, pos, subifds, nodepos)
 	if err != nil {
 		return 0, err
 	}
