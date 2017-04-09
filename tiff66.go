@@ -594,7 +594,8 @@ type ImageSegment []byte
 
 // IDs of fields that specify image data. One field has an array of offsets
 // and the other an array of sizes, e.g., StripOffsets and StripByteCounts
-// in TIFF IFDs.
+// in TIFF IFDs. SizeField can be zero in special cases where it's not
+// used.
 type ImageDataSpec struct {
 	OffsetTag Tag
 	SizeTag   Tag
@@ -602,9 +603,9 @@ type ImageDataSpec struct {
 
 // Image data segments for a single pair of fields (offsets and sizes).
 type ImageData struct {
-	OffsetField *Field
-	SizeField   *Field
-	Segments    []ImageSegment
+	OffsetTag Tag
+	SizeTag   Tag
+	Segments  []ImageSegment
 }
 
 // Fields and image data for a single IFD.
@@ -661,12 +662,28 @@ func (ifd IFD_T) TotalSize(order binary.ByteOrder) uint32 {
 	return ifd.Size() + ifd.DataSize(order)
 }
 
+// Return any fields that match the given tags. The number of returned
+// fields may be less than the number of tags, if not all tags are
+// found, or greater if there are duplicate tags (which is probably
+// not valid).
+func (ifd IFD_T) FindFields(tags []Tag) []Field {
+	fields := make([]Field, 0, len(tags))
+	for _, field := range ifd.Fields {
+		for _, tag := range tags {
+			if field.Tag == tag {
+				fields = append(fields, field)
+			}
+		}
+	}
+	return fields
+}
+
 // Return the size of a TIFF header.
 func HeaderSize() uint32 {
 	// byte order (2 bytes), magic number (2 bytes), IFD position (4 bytes)
 	return 8
 }
-	
+
 // Try to read a TIFF header from a slice. Returns an indication of
 // validity, the byte order, and the position of the 0th IFD.
 func GetHeader(buf []byte) (bool, binary.ByteOrder, uint32) {
@@ -743,7 +760,7 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) [
 					segments[j] = buf[offset : offset+size]
 				}
 			}
-			imageData = append(imageData, ImageData{specF[i].offsetField, specF[i].sizeField, segments})
+			imageData = append(imageData, ImageData{specF[i].offsetField.Tag, specF[i].sizeField.Tag, segments})
 		}
 	}
 	return imageData
@@ -820,19 +837,28 @@ type IFDpos struct {
 }
 
 // Put image data into buffer at pos. Return next data position in buf and
-// a mapping of field tag to offset array.
-func putImageData(buf []byte, imgData []ImageData, pos uint32, order binary.ByteOrder) (uint32, map[Tag][]byte, error) {
-	offsets := make(map[Tag][]byte)
-	for _, id := range imgData {
-		data := make([]byte, id.OffsetField.Size())
-		offsets[id.OffsetField.Tag] = data
-		if id.OffsetField.Type != LONG && id.OffsetField.Type != SHORT {
-			return pos, offsets, errors.New("putImageData: OffsetField not LONG or SHORT")
+// a mapping from field tag to an array of offsets where image data was
+// placed.
+func putImageData(buf []byte, ifd IFD_T, pos uint32, order binary.ByteOrder) (uint32, map[Tag][]byte, error) {
+	offsetTags := make([]Tag, len(ifd.ImageData))
+	for i := range ifd.ImageData {
+		offsetTags[i] = ifd.ImageData[i].OffsetTag
+	}
+	offsetFields := ifd.FindFields(offsetTags)
+	if len(offsetFields) != len(offsetTags) {
+		return pos, nil, errors.New("putImageData: ImageData offset fields don't match IFD")
+	}
+	offsetMap := make(map[Tag][]byte)
+	for i, id := range ifd.ImageData {
+		offsetData := make([]byte, offsetFields[i].Size())
+		offsetMap[offsetTags[i]] = offsetData
+		if offsetFields[i].Type != LONG && offsetFields[i].Type != SHORT {
+			return pos, offsetMap, errors.New("putImageData: OffsetField not LONG or SHORT")
 		}
 		for j, seg := range id.Segments {
 			copy(buf[pos:], seg)
-			if id.OffsetField.Type == LONG {
-				order.PutUint32(data[j*4:], pos)
+			if offsetFields[i].Type == LONG {
+				order.PutUint32(offsetData[j*4:], pos)
 			} else {
 				// Rewriting a file may fail if an offset
 				// is in a SHORT field and we are trying to
@@ -840,14 +866,14 @@ func putImageData(buf []byte, imgData []ImageData, pos uint32, order binary.Byte
 				// probably to convert such fields to LONG
 				// before encoding, IFD_T.Fix().
 				if pos >= 2<<15 {
-					return pos, offsets, errors.New("putImageData: position is too large for SHORT field")
+					return pos, offsetMap, errors.New("putImageData: position is too large for SHORT field")
 				}
-				order.PutUint16(data[j*2:], uint16(pos))
+				order.PutUint16(offsetData[j*2:], uint16(pos))
 			}
 			pos += uint32(len(seg))
 		}
 	}
-	return pos, offsets, nil
+	return pos, offsetMap, nil
 }
 
 // Serialize an IFD and its external data into a byte slice at 'pos'.
@@ -865,7 +891,7 @@ func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []I
 	}
 	datapos := pos + ifd.Size()
 	// Order in the buffer will be 1) IFD 2) image data 3) IFD external data
-	datapos, offsets, err := putImageData(buf, ifd.ImageData, datapos, order)
+	datapos, offsets, err := putImageData(buf, ifd, datapos, order)
 	if err != nil {
 		return 0, err
 	}
@@ -923,10 +949,10 @@ func (ifd *IFD_T) AddFields(fields []Field) {
 		newFields = make([]Field, newLen)
 		copy(newFields, ifd.Fields)
 	} else {
-		newFields = ifd.Fields[:curLen + addLen]
+		newFields = ifd.Fields[:curLen+addLen]
 	}
 	for i := 0; i < addLen; i++ {
-		newFields[curLen + i] = fields[i]
+		newFields[curLen+i] = fields[i]
 	}
 	sort.Slice(newFields, func(i, j int) bool { return newFields[i].Tag < newFields[j].Tag })
 	ifd.Fields = newFields
@@ -938,7 +964,7 @@ func (ifd *IFD_T) DeleteFields(tags []Tag) {
 	numFields := len(ifd.Fields)
 	for i := 0; i < numFields; i++ {
 		if shift > 0 {
-			ifd.Fields[i - shift] = ifd.Fields[i]
+			ifd.Fields[i-shift] = ifd.Fields[i]
 		}
 		for _, t := range tags {
 			if ifd.Fields[i].Tag == t {
@@ -946,7 +972,7 @@ func (ifd *IFD_T) DeleteFields(tags []Tag) {
 			}
 		}
 	}
-	ifd.Fields = ifd.Fields[:numFields - shift]
+	ifd.Fields = ifd.Fields[:numFields-shift]
 }
 
 // IFD Tag namespace.
@@ -990,8 +1016,8 @@ type IFDNode struct {
 
 // TIFF subifd and the field in the parent that referred to it.
 type SubIFD struct {
-	Field *Field
-	Node  *IFDNode
+	Tag  Tag
+	Node *IFDNode
 }
 
 const interOpIFD = 0xA005
@@ -1060,7 +1086,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			// A SubIFDs field can point to multiple IFDs.
 			for j := uint32(0); j < field.Count; j++ {
 				var sub SubIFD
-				sub.Field = &node.IFD.Fields[i]
+				sub.Tag = node.IFD.Fields[i].Tag
 				var space TagSpace = UnknownSpace
 				switch node.Space {
 				case TIFFSpace:
@@ -1139,7 +1165,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	var err error
 	for i := 0; i < nsubs; i++ {
 		next = Align(next)
-		subifds[i].Tag = node.SubIFDs[i].Field.Tag
+		subifds[i].Tag = node.SubIFDs[i].Tag
 		subifds[i].Pos = next
 		next, err = node.SubIFDs[i].Node.PutIFDTree(buf, next, order)
 		if err != nil {
