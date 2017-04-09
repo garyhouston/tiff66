@@ -760,7 +760,11 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) [
 					segments[j] = buf[offset : offset+size]
 				}
 			}
-			imageData = append(imageData, ImageData{specF[i].offsetField.Tag, specF[i].sizeField.Tag, segments})
+			sizeTag := Tag(0)
+			if specF[i].sizeField != nil {
+				sizeTag = specF[i].sizeField.Tag
+			}
+			imageData = append(imageData, ImageData{specF[i].offsetField.Tag, sizeTag, segments})
 		}
 	}
 	return imageData
