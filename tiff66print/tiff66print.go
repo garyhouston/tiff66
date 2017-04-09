@@ -33,7 +33,7 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder, length uint32) {
 	} else {
 		fmt.Println("Image data:")
 		for _, id := range imageData {
-			fmt.Printf("%s[0] has length %d\n", tiff.TagNames[id.OffsetField.Tag], len(id.Segments[0]))
+			fmt.Printf("%s[0] has length %d\n", tiff.TagNames[id.OffsetTag], len(id.Segments[0]))
 		}
 	}
 	for i := 0; i < len(node.SubIFDs); i++ {
