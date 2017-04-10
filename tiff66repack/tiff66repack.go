@@ -28,7 +28,7 @@ func main() {
 	}
 	root.Fix(order)
 	headerSize := tiff.HeaderSize()
-	fileSize := headerSize + root.TreeSize(order)
+	fileSize := headerSize + root.TreeSize()
 	out := make([]byte, fileSize)
 	tiff.PutHeader(out, order, headerSize)
 	next, err := root.PutIFDTree(out, headerSize, order)

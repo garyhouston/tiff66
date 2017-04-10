@@ -17,7 +17,7 @@ func TestLoop(t *testing.T) {
 	var ifd2 IFD_T
 	ifd2.Fields = make([]Field, 1)
 	ifd2.Fields[0] = ifd1.Fields[0]
-	ifdsize := ifd1.Size() + ifd1.DataSize(order)
+	ifdsize := ifd1.Size() + ifd1.DataSize()
 	buf := make([]byte, HeaderSize()+2*ifdsize)
 	ifd1pos := HeaderSize()
 	ifd2pos := ifd1pos + ifdsize

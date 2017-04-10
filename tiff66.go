@@ -640,7 +640,7 @@ func (ifd IFD_T) Size() uint32 {
 
 // Return the size of the external data of a TIFF IFD if was serialized.
 // Includes field data and image data, but not sub IFDs.
-func (ifd IFD_T) DataSize(order binary.ByteOrder) uint32 {
+func (ifd IFD_T) DataSize() uint32 {
 	var datasize uint32
 	for _, field := range ifd.Fields {
 		size := field.Size()
@@ -658,8 +658,8 @@ func (ifd IFD_T) DataSize(order binary.ByteOrder) uint32 {
 
 // Return the size of an IFD and its external data if it was serialized.
 // External data includes field data and image data, but not sub IFDs.
-func (ifd IFD_T) TotalSize(order binary.ByteOrder) uint32 {
-	return ifd.Size() + ifd.DataSize(order)
+func (ifd IFD_T) TotalSize() uint32 {
+	return ifd.Size() + ifd.DataSize()
 }
 
 // Return any fields that match the given tags. The number of returned
@@ -1135,15 +1135,15 @@ func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) 
 }
 
 // Return the serialized size of a node and all the nodes to which it refers.
-func (node IFDNode) TreeSize(order binary.ByteOrder) uint32 {
+func (node IFDNode) TreeSize() uint32 {
 	size := uint32(0)
 	for i := 0; i < len(node.SubIFDs); i++ {
-		size += node.SubIFDs[i].Node.TreeSize(order)
+		size += node.SubIFDs[i].Node.TreeSize()
 	}
 	if node.Next != nil {
-		size += node.Next.TreeSize(order)
+		size += node.Next.TreeSize()
 	}
-	tsize := node.IFD.TotalSize(order)
+	tsize := node.IFD.TotalSize()
 	if tsize/2*2 != tsize {
 		// Allow for a filler byte for word alignment.
 		tsize++
@@ -1165,7 +1165,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	// refers to, recording their positions.
 	nsubs := len(node.SubIFDs)
 	subifds := make([]IFDpos, nsubs)
-	next := pos + node.IFD.TotalSize(order)
+	next := pos + node.IFD.TotalSize()
 	var err error
 	for i := 0; i < nsubs; i++ {
 		next = Align(next)
