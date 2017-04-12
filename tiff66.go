@@ -662,16 +662,16 @@ func (ifd IFD_T) TotalSize() uint32 {
 	return ifd.Size() + ifd.DataSize()
 }
 
-// Return any fields that match the given tags. The number of returned
-// fields may be less than the number of tags, if not all tags are
-// found, or greater if there are duplicate tags (which is probably
-// not valid).
-func (ifd IFD_T) FindFields(tags []Tag) []Field {
-	fields := make([]Field, 0, len(tags))
-	for _, field := range ifd.Fields {
+// Return pointers to fields in the IFD that match the given tags. The
+// number of returned fields may be less than the number of tags, if
+// not all tags are found, or greater if there are duplicate tags
+// (which is probably not valid).
+func (ifd IFD_T) FindFields(tags []Tag) []*Field {
+	fields := make([]*Field, 0, len(tags))
+	for i := range ifd.Fields {
 		for _, tag := range tags {
-			if field.Tag == tag {
-				fields = append(fields, field)
+			if ifd.Fields[i].Tag == tag {
+				fields = append(fields, &ifd.Fields[i])
 			}
 		}
 	}
@@ -847,7 +847,6 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 			fields[i].Data = buf[pos : pos+size]
 		} else {
 			dataPos := order.Uint32(buf[pos:])
-
 			if dataPos+size-1 > bufsize {
 				return ifd, 0, GetIFDError{ErrFieldData, ifdpos, entries, fields[i].Tag}
 			}
