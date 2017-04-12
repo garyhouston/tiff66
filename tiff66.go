@@ -731,7 +731,8 @@ type imageDataFields struct {
 }
 
 // Build an ImageData structure from a buffer.
-func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) []ImageData {
+func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) ([]ImageData, *GetIFDError) {
+	bufsize := uint32(len(buf))
 	imageData := make([]ImageData, 0, len(specF))
 	for i := 0; i < len(specF); i++ {
 		if specF[i].offsetField != nil {
@@ -745,6 +746,9 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) [
 					size = 64
 				case JPEGDCTables, JPEGACTables:
 					offset = specF[i].offsetField.Long(j, order)
+					if offset+15 >= bufsize {
+						return nil, &GetIFDError{4, 0, 0, specF[i].offsetField.Tag}
+					}
 					numvals := uint32(0)
 					for k := uint32(0); k < 16; k++ {
 						numvals += uint32(buf[offset+k])
@@ -757,6 +761,9 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) [
 					}
 				}
 				if size > 0 {
+					if offset+size-1 > bufsize {
+						return nil, &GetIFDError{4, 0, 0, specF[i].offsetField.Tag}
+					}
 					segments[j] = buf[offset : offset+size]
 				}
 			}
@@ -767,26 +774,69 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) [
 			imageData = append(imageData, ImageData{specF[i].offsetField.Tag, sizeTag, segments})
 		}
 	}
-	return imageData
+	return imageData, nil
 }
 
-// Implementaion of GetIFD. Invalid TIFF files may cause panicking with
-// "slice bounds out of range".
-func getIFDImpl(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec) (IFD_T, uint32) {
+const (
+	ErrIFDPos       = 1 // IFD position outside buffer.
+	ErrIFDEmpty     = 2 // IFD has no entries.
+	ErrIFDTruncated = 3 // IFD doesn't fit in buffer.
+	ErrFieldData    = 4 // Field data pointer outside buffer.
+	ErrImageData    = 5 // ImageData pointer outside buffer.
+)
+
+type GetIFDError struct {
+	ErrType    int
+	IFDPos     uint32
+	IFDEntries uint16
+	FieldTag   Tag
+}
+
+func (err GetIFDError) Error() string {
+	switch err.ErrType {
+	case ErrIFDPos:
+		return fmt.Sprintf("Attempted to read IFD at position %d, past end of input", err.IFDPos)
+	case ErrIFDEmpty:
+		return fmt.Sprintf("IFD at offset %d has no fields", err.IFDPos)
+	case ErrIFDTruncated:
+		return fmt.Sprintf("IFD at offset %d with %d fields extends past end of input", err.IFDPos, err.IFDEntries)
+	case ErrFieldData:
+		return fmt.Sprintf("When reading IFD at offset %d, data for tag %d extends past end of input", err.IFDPos, err.FieldTag)
+	case ErrImageData:
+		return fmt.Sprintf("When reading IFD at offset %d, image data for tag %d extends past end of input", err.IFDPos, err.FieldTag)
+	default:
+		return "Invalid error"
+	}
+}
+
+// Read an IFD and its image data, starting at a given position in a
+// byte slice. 'spec' specifies the fields that may refer to image
+// data: it will probably be TIFFImageData if reading a TIFF IFD or
+// nil if reading a private IFD. Returns the IFD and the position of
+// the next IFD, or 0 if none.  Field and image data in the returned
+// IFD will point into the slice, so modifying one will modify the
+// other.
+func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec) (IFD_T, uint32, error) {
+	var ifd IFD_T
+	ifdpos := pos
+	bufsize := uint32(len(buf))
+	if pos+1 > bufsize {
+		return ifd, 0, GetIFDError{ErrIFDPos, ifdpos, 0, 0}
+	}
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
-	pos += 2
+	if entries == 0 {
+		return ifd, 0, GetIFDError{ErrIFDEmpty, ifdpos, 0, 0}
+	}
 	fields := make([]Field, entries)
+	ifd.Fields = fields
+	if pos+ifd.Size() > bufsize {
+		ifd.Fields = nil
+		return ifd, 0, GetIFDError{ErrIFDTruncated, ifdpos, entries, 0}
+	}
+	pos += 2
 	specF := make([]imageDataFields, len(spec))
 	for i := uint16(0); i < entries; i++ {
 		fields[i].Tag = Tag(order.Uint16(buf[pos:]))
-		for j := range spec {
-			if spec[j].OffsetTag == fields[i].Tag {
-				specF[j].offsetField = &fields[i]
-			}
-			if spec[j].SizeTag == fields[i].Tag {
-				specF[j].sizeField = &fields[i]
-			}
-		}
 		pos += 2
 		fields[i].Type = Type(order.Uint16(buf[pos:]))
 		pos += 2
@@ -797,33 +847,31 @@ func getIFDImpl(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageData
 			fields[i].Data = buf[pos : pos+size]
 		} else {
 			dataPos := order.Uint32(buf[pos:])
+
+			if dataPos+size-1 > bufsize {
+				return ifd, 0, GetIFDError{ErrFieldData, ifdpos, entries, fields[i].Tag}
+			}
 			fields[i].Data = buf[dataPos : dataPos+size]
+		}
+		for j := range spec {
+			if spec[j].OffsetTag == fields[i].Tag {
+				specF[j].offsetField = &fields[i]
+			}
+			if spec[j].SizeTag == fields[i].Tag {
+				specF[j].sizeField = &fields[i]
+			}
 		}
 		pos += 4
 	}
-	var ifd IFD_T
-	ifd.Fields = fields
-	ifd.ImageData = getImageData(buf, specF, order)
+	var err *GetIFDError
+	ifd.ImageData, err = getImageData(buf, specF, order)
+	if err != nil {
+		err.IFDPos = ifdpos
+		err.IFDEntries = entries
+		return ifd, 0, err
+	}
 	next := order.Uint32(buf[pos:])
-	return ifd, next
-}
-
-// Read an IFD and its image data, starting at a given position in a
-// byte slice. 'spec' specifies the fields that may refer to image
-// data: it will probably be TIFFImageData if reading a TIFF IFD or
-// nil if reading a private IFD. Returns the IFD and the position of
-// the next IFD, or 0 if none.  Field and image data in the returned
-// IFD will point into the slice, so modifying one will modify the
-// other. May return a "slice out of bounds" error if the input is
-// invalid.
-func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec) (ifd IFD_T, next uint32, err error) {
-	defer func() {
-		if val := recover(); val != nil {
-			err = fmt.Errorf("%v", val)
-		}
-	}()
-	ifd, next = getIFDImpl(buf, order, pos, spec)
-	return ifd, next, err
+	return ifd, next, nil
 }
 
 // Align a position to the next word (2 byte) boundary.
