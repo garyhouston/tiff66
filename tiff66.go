@@ -1083,28 +1083,25 @@ type SubIFD struct {
 
 const interOpIFD = 0xA005
 
-// Return the IFD space of a sub-IFD referred to by field in a TIFF IFD.
-func Space(tag Tag) TagSpace {
-	switch tag {
-	case SubIFDs:
-		return TIFFSpace
-	case ExifIFD:
-		return ExifSpace
-	case GPSIFD:
-		return GPSSpace
-	default:
-		return UnknownSpace
+// Given a field 'tag' in a 'space' IFD which refers to a sub-IFD,
+// return the name space of the sub-IFD.
+func SubSpace(space TagSpace, tag Tag) TagSpace {
+	switch space {
+	case TIFFSpace:
+		switch tag {
+		case SubIFDs:
+			return TIFFSpace
+		case ExifIFD:
+			return ExifSpace
+		case GPSIFD:
+			return GPSSpace
+		}
+	case ExifSpace:
+		if tag == interOpIFD {
+			return InteropSpace
+		}
 	}
-}
-
-// Return the IFD space of a sub-IFD referred to by field in an Exif IFD.
-func ExifTagSpace(tag Tag) TagSpace {
-	switch tag {
-	case interOpIFD:
-		return InteropSpace
-	default:
-		return UnknownSpace
-	}
+	return UnknownSpace
 }
 
 // Helper for GetIFDTree. ifdPositions records byte positions of known
@@ -1135,15 +1132,9 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			for j := uint32(0); j < field.Count; j++ {
 				var sub SubIFD
 				sub.Tag = node.IFD.Fields[i].Tag
-				var space TagSpace = UnknownSpace
-				switch node.Space {
-				case TIFFSpace:
-					space = Space(field.Tag)
-				case ExifSpace:
-					space = ExifTagSpace(field.Tag)
-				}
+				subspace := SubSpace(node.Space, field.Tag)
 				node.SubIFDs = append(node.SubIFDs, sub)
-				node.SubIFDs[subnum].Node, err = getIFDTreeIter(buf, order, field.Long(j, order), space, ifdPositions)
+				node.SubIFDs[subnum].Node, err = getIFDTreeIter(buf, order, field.Long(j, order), subspace, ifdPositions)
 				if err != nil {
 					return nil, err
 				}
