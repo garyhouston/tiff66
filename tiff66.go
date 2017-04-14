@@ -316,10 +316,20 @@ func (f Field) Size() uint32 {
 	return f.Type.Size() * f.Count
 }
 
-// Indicate if this field a pointer to another IFD. This works on TIFF IFDs,
-// not necessarily on private ones.
-func (f Field) IsIFD() bool {
-	return f.Type == IFD || f.Tag == SubIFDs || f.Tag == ExifIFD || f.Tag == GPSIFD
+// Indicate if this field a pointer to another IFD. Depends on the IFD
+// namespace.
+func (f Field) IsIFD(space TagSpace) bool {
+	if f.Type == IFD {
+		return true
+	}
+	switch space {
+	case TIFFSpace:
+		return f.Tag == SubIFDs || f.Tag == ExifIFD || f.Tag == GPSIFD
+	case ExifSpace:
+		return f.Tag == interOpIFD
+	default:
+		return false
+	}
 }
 
 // Return a BYTE field's ith data element.
@@ -1087,11 +1097,6 @@ func Space(tag Tag) TagSpace {
 	}
 }
 
-// Indicate if this field (in an Exif IFD) is a pointer to another IFD.
-func ExifIsIFD(f Field) bool {
-	return f.Tag == interOpIFD || f.Type == IFD
-}
-
 // Return the IFD space of a sub-IFD referred to by field in an Exif IFD.
 func ExifTagSpace(tag Tag) TagSpace {
 	switch tag {
@@ -1124,17 +1129,9 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 	subnum := uint32(0)
 	node.SubIFDs = make([]SubIFD, 0, 10)
 	for i, field := range node.IFD.Fields {
-		var isIFD bool
-		switch node.Space {
-		case TIFFSpace:
-			isIFD = field.IsIFD()
-		case ExifSpace:
-			isIFD = ExifIsIFD(field)
-		default:
-			isIFD = field.Type == IFD
-		}
-		if isIFD {
-			// A SubIFDs field can point to multiple IFDs.
+		if field.IsIFD(node.Space) {
+			// Generally, a field references a single IFD, but
+			// SubIFDs can point to multiple IFDs.
 			for j := uint32(0); j < field.Count; j++ {
 				var sub SubIFD
 				sub.Tag = node.IFD.Fields[i].Tag
