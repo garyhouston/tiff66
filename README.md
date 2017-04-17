@@ -12,9 +12,11 @@ The tiff66print program prints the IFDs (image file directories) and fields of a
 
 The tiff66repack program decodes a TIFF file and encodes it into a new file.
 
-TIFF is a difficult file format, and there may be omissions in this library that prevent correct processing of all possible TIFF files. For example, if an unsupported data field holds a pointer (LONG value) to data, that data will be omitted. The output of tiff66print will show any unknown fields. tiff66repack can be used to check if the decoding and encoding process changes a file's size significantly. Files can also grow in size: if more than one TIFF field refers to the same data, encoding will duplicate it.
+The [Exif44]((https://github.com/garyhouston/exif44) library extends this library with additional support for Exif fields, and has corresponding print and repack programs.
 
-In addition, Makernote fields found in Exif are not currently decoded, and are likely to contain pointers. The pointers will be broken if the file is repacked.
+TIFF is a difficult file format, and there may be omissions in this library that prevent correct processing of all possible TIFF files. For example, fields that are apparently integers can actually be pointers to arbitrary data. Such fields need to be supported in the library explicitly. The output of tiff66print will show any unknown fields. The sizes of the original and repacked files can also be compared. The repacked version may be larger if mmore than one TIFF field points to the same data; encoding will duplicate it. Output from tiff66print can also be compared between the original file and the repacked version. Some differences are to be expected, such as positions of sub-IFDs. 
+
+In addition, most formats of maker notes found in Exif are not currently encoded or decoded. In some cases they contain pointers that will be broken if the file is repacked.
 
 This library makes no provision for modification of data in multiple threads. Mutexes etc., should be used as required.
 
