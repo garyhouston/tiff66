@@ -1,6 +1,7 @@
 package tiff66
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -641,7 +642,7 @@ var JPEGACTablesImageData = ImageDataSpec{JPEGACTables, 0}
 var TIFFImageData = []ImageDataSpec{StripImageData, TileImageData, FreeImageData, JPEGInterchangeImageData, JPEGQTablesImageData, JPEGDCTablesImageData, JPEGACTablesImageData}
 
 // Return the size of an IFD if it was serialized, not including any exernal
-// data.
+// data or extra maker note headers.
 func (ifd IFD_T) Size() uint32 {
 	// 2 bytes for the entry count, 12 for each entry, and 4 for the
 	// position of the next ifd.
@@ -667,7 +668,8 @@ func (ifd IFD_T) DataSize() uint32 {
 }
 
 // Return the size of an IFD and its external data if it was serialized.
-// External data includes field data and image data, but not sub IFDs.
+// External data includes field data and image data, but not sub IFDs or
+// maker note headers.
 func (ifd IFD_T) TotalSize() uint32 {
 	return ifd.Size() + ifd.DataSize()
 }
@@ -819,18 +821,26 @@ func (err GetIFDError) Error() string {
 	}
 }
 
-// Read an IFD and its image data, starting at a given position in a
-// byte slice. 'spec' specifies the fields that may refer to image
-// data: it will probably be TIFFImageData if reading a TIFF IFD or
-// nil if reading a private IFD. Returns the IFD and the position of
-// the next IFD, or 0 if none.  Field and image data in the returned
-// IFD will point into the slice, so modifying one will modify the
-// other.
-func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec) (IFD_T, uint32, error) {
+// Procedure to be applied to fields after they are read from an
+// IFD. Receives field index, field struct, and data position within
+// buffer. No return values. Used below to record the position of a
+// maker note field.
+type fieldProc func(uint16, *Field, uint32)
+
+// Read an IFD and its image data, from a given position in a 'buf'.
+// 'spec' specifies the fields that may refer to image data: it will
+// probably be TIFFImageData if reading a TIFF IFD or nil if reading a
+// private IFD. 'fieldProc' is a procedure for additional field
+// processing, or nil if not required. Return values are the IFD, the
+// position of the next IFD or 0 if none, and an error status.  Field
+// and image data in the returned IFD will point into the slice, so
+// modifying one will modify the other. Any error will be of type
+// GetIFDError.
+func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec, fieldProc fieldProc) (IFD_T, uint32, error) {
 	var ifd IFD_T
 	ifdpos := pos
 	bufsize := uint32(len(buf))
-	if pos+1 > bufsize {
+	if pos+2 > bufsize {
 		return ifd, 0, GetIFDError{ErrIFDPos, ifdpos, 0, 0}
 	}
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
@@ -853,15 +863,18 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 		fields[i].Count = order.Uint32(buf[pos:])
 		pos += 4
 		size := fields[i].Size()
-		if size <= 4 {
-			fields[i].Data = buf[pos : pos+size]
-		} else {
-			dataPos := order.Uint32(buf[pos:])
+		dataPos := pos
+		if size > 4 {
+			dataPos = order.Uint32(buf[pos:])
 			if dataPos+size-1 > bufsize {
 				return ifd, 0, GetIFDError{ErrFieldData, ifdpos, entries, fields[i].Tag}
 			}
-			fields[i].Data = buf[dataPos : dataPos+size]
 		}
+		fields[i].Data = buf[dataPos : dataPos+size]
+		if fieldProc != nil {
+			fieldProc(i, &fields[i], dataPos)
+		}
+		pos += 4
 		for j := range spec {
 			if spec[j].OffsetTag == fields[i].Tag {
 				specF[j].offsetField = &fields[i]
@@ -870,7 +883,6 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 				specF[j].sizeField = &fields[i]
 			}
 		}
-		pos += 4
 	}
 	var err *GetIFDError
 	ifd.ImageData, err = getImageData(buf, specF, order)
@@ -893,8 +905,9 @@ func Align(pos uint32) uint32 {
 
 // Specify the serialized position of a SubIFD.
 type IFDpos struct {
-	Tag Tag // field that refers to the subIFD.
-	Pos uint32
+	Tag  Tag // field that refers to the subIFD.
+	Pos  uint32
+	Size uint32 // for maker notes only.
 }
 
 // Put image data into buffer at pos. Return next data position in buf and
@@ -948,7 +961,7 @@ func putImageData(buf []byte, ifd IFD_T, pos uint32, order binary.ByteOrder) (ui
 // the next IFD, or 0 if none.
 func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []IFDpos, nextptr uint32) (uint32, error) {
 	if pos/2*2 != pos {
-		return 0, errors.New("PutIFD: pos is not word aligned")
+		return 0, errors.New("IFD_T.Put: pos is not word aligned")
 	}
 	datapos := pos + ifd.Size()
 	// Order in the buffer will be 1) IFD 2) image data 3) IFD external data
@@ -960,27 +973,54 @@ func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []I
 	order.PutUint16(buf[pos:], uint16(numFields))
 	pos += 2
 	var lastTag Tag
+	var subifdPtr = make([]*IFDpos, 0, len(subifds))
 	for _, field := range ifd.Fields {
 		if field.Tag < lastTag {
-			return 0, errors.New("PutIFD: tags are out of order")
+			return 0, errors.New("IFD_T.Put: tags are out of order")
 		}
 		lastTag = field.Tag
 		order.PutUint16(buf[pos:], uint16(field.Tag))
 		pos += 2
 		order.PutUint16(buf[pos:], uint16(field.Type))
 		pos += 2
+		subifdPtr = subifdPtr[0:0]
+		for i := range subifds {
+			if subifds[i].Tag == field.Tag {
+				subifdPtr = append(subifdPtr, &subifds[i])
+			}
+		}
+		if len(subifdPtr) > 0 && subifdPtr[0].Size != 0 {
+			// pre-sized field, such as maker notes.
+			if len(subifdPtr) > 1 {
+				errors.New("IFD_T.Put: pre-sized field expected to have a single entry.")
+			}
+			if field.Type != UNDEFINED {
+				return 0, errors.New("IFD_T.Put: pre-sized field expected to have UNDEFINED type")
+			}
+			order.PutUint32(buf[pos:], subifdPtr[0].Size)
+			pos += 4
+			order.PutUint32(buf[pos:], subifdPtr[0].Pos)
+			pos += 4
+			continue
+		}
 		order.PutUint32(buf[pos:], field.Count)
 		pos += 4
-		size := field.Size()
 		data := field.Data
-		imagedata := offsets[field.Tag]
-		if imagedata != nil {
-			data = imagedata
-		}
-		for _, subifd := range subifds {
-			if subifd.Tag == field.Tag {
-				data = make([]byte, 4)
-				order.PutUint32(data, subifd.Pos)
+		size := field.Size()
+		if len(subifdPtr) > 0 {
+			// Field points to one or more sub-IFDs.
+			if field.Type.Size() != 4 {
+				return 0, errors.New("IFD_T.Put: sub-IFD pointer expected to have field type with size 4")
+			}
+			data = make([]byte, size)
+			for i := range subifdPtr {
+				order.PutUint32(data[i*4:], subifdPtr[i].Pos)
+			}
+		} else {
+			imagedata := offsets[field.Tag]
+			if imagedata != nil {
+				// Image data offset field.
+				data = imagedata
 			}
 		}
 		if size <= 4 {
@@ -1048,6 +1088,10 @@ const (
 	ExifSpace    TagSpace = 2
 	GPSSpace     TagSpace = 3
 	InteropSpace TagSpace = 4
+	// Maker notes below. If adding another, uses of
+	// Panasonic1Space in this file will indicate where support is
+	// needed.
+	Panasonic1Space TagSpace = 5
 )
 
 func (space TagSpace) Name() string {
@@ -1060,6 +1104,8 @@ func (space TagSpace) Name() string {
 		return "GPS"
 	case InteropSpace:
 		return "Interop"
+	case Panasonic1Space:
+		return "Panasonic-1"
 	case UnknownSpace:
 		return "Unknown"
 	}
@@ -1081,7 +1127,9 @@ type SubIFD struct {
 	Node *IFDNode
 }
 
+// Fields in Exif IFDs that affect IFD structure.
 const interOpIFD = 0xA005
+const makerNote = 0x927C
 
 // Given a field 'tag' in a 'space' IFD which refers to a sub-IFD,
 // return the name space of the sub-IFD.
@@ -1104,9 +1152,17 @@ func SubSpace(space TagSpace, tag Tag) TagSpace {
 	return UnknownSpace
 }
 
+// Data needed for unpacking Exif maker notes.
+type makerNoteData struct {
+	make     string
+	model    string
+	position uint32
+	exifNode *IFDNode
+}
+
 // Helper for GetIFDTree. ifdPositions records byte positions of known
 // IFDs so that loops can be detected.
-func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace, ifdPositions map[uint32]bool) (*IFDNode, error) {
+func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace, maker *makerNoteData, ifdPositions map[uint32]bool) (*IFDNode, error) {
 	var node IFDNode
 	node.Space = space
 	var specs []ImageDataSpec
@@ -1119,7 +1175,16 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 	ifdPositions[pos] = true
 	var next uint32
 	var err error
-	node.IFD, next, err = GetIFD(buf, order, pos, specs)
+	var makerNotePos uint32
+	var fieldProc fieldProc
+	if node.Space == ExifSpace {
+		fieldProc = func(fieldNo uint16, field *Field, dataPos uint32) {
+			if field.Tag == makerNote {
+				makerNotePos = dataPos
+			}
+		}
+	}
+	node.IFD, next, err = GetIFD(buf, order, pos, specs, fieldProc)
 	if err != nil {
 		return nil, err
 	}
@@ -1129,16 +1194,30 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 		if field.IsIFD(node.Space) {
 			// Generally, a field references a single IFD, but
 			// SubIFDs can point to multiple IFDs.
+			// Maker notes aren't processed here.
 			for j := uint32(0); j < field.Count; j++ {
+				subspace := SubSpace(node.Space, field.Tag)
 				var sub SubIFD
 				sub.Tag = node.IFD.Fields[i].Tag
-				subspace := SubSpace(node.Space, field.Tag)
-				node.SubIFDs = append(node.SubIFDs, sub)
-				node.SubIFDs[subnum].Node, err = getIFDTreeIter(buf, order, field.Long(j, order), subspace, ifdPositions)
+				sub.Node, err = getIFDTreeIter(buf, order, field.Long(j, order), subspace, maker, ifdPositions)
 				if err != nil {
 					return nil, err
 				}
+				node.SubIFDs = append(node.SubIFDs, sub)
 				subnum++
+			}
+		} else {
+			if node.Space == TIFFSpace {
+				if field.Tag == Make {
+					maker.make = field.ASCII()
+				} else if field.Tag == Model {
+					maker.model = field.ASCII()
+				}
+			} else if node.Space == ExifSpace {
+				if field.Tag == makerNote {
+					maker.position = makerNotePos
+					maker.exifNode = &node
+				}
 			}
 		}
 	}
@@ -1154,7 +1233,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			// Assume the next IFD is the same type.
 			space = node.Space
 		}
-		node.Next, err = getIFDTreeIter(buf, order, next, space, ifdPositions)
+		node.Next, err = getIFDTreeIter(buf, order, next, space, maker, ifdPositions)
 		if err != nil {
 			return nil, err
 		}
@@ -1162,14 +1241,51 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 	return &node, nil
 }
 
+var panasonicLabel = []byte("Panasonic\000\000\000")
+
+// Unpack maker note data, and append its IFD to SubIFDs in the Exif node.
+func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error {
+	var makerNode *IFDNode
+	if bytes.HasPrefix(buf[maker.position:], panasonicLabel) {
+		var node IFDNode
+		var err error
+		node.IFD, _, err = GetIFD(buf, order, maker.position+uint32(len(panasonicLabel)), nil, nil)
+		if err != nil {
+			return err
+		}
+		node.Space = Panasonic1Space
+		makerNode = &node
+	}
+	if makerNode != nil {
+		var sub SubIFD
+		sub.Tag = makerNote
+		sub.Node = makerNode
+		maker.exifNode.SubIFDs = append(maker.exifNode.SubIFDs, sub)
+	}
+	return nil
+}
+
 // Read an IFD, and all the other IFDs to which it refers, starting
 // from a given position in a byte slice.
 func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) (*IFDNode, error) {
 	ifdPositions := make(map[uint32]bool)
-	return getIFDTreeIter(buf, order, pos, space, ifdPositions)
+	var maker makerNoteData
+	tree, err := getIFDTreeIter(buf, order, pos, space, &maker, ifdPositions)
+	if err != nil {
+		return tree, err
+	}
+	// Unpacking maker notes requires data from the TIFF and Exif
+	// IFDs, so is done now after everything else has been unpacked.
+	if maker.position != 0 {
+		if err := getMakerNote(buf, order, maker); err != nil {
+			return tree, err
+		}
+	}
+	return tree, err
 }
 
 // Return the serialized size of a node and all the nodes to which it refers.
+// Includes all external data, image data, and maker note headers.
 func (node IFDNode) TreeSize() uint32 {
 	size := uint32(0)
 	for i := 0; i < len(node.SubIFDs); i++ {
@@ -1184,8 +1300,26 @@ func (node IFDNode) TreeSize() uint32 {
 		tsize++
 	}
 	size += tsize
+	if node.Space == Panasonic1Space {
+		size += uint32(len(panasonicLabel))
+	}
 	return size
 
+}
+
+// Put a maker note into a buffer at pos. Returns the next data position.
+func (node IFDNode) putMakerNote(buf []byte, pos uint32, order binary.ByteOrder) (uint32, error) {
+	if node.Space == Panasonic1Space {
+		copy(buf[pos:], panasonicLabel)
+		pos += uint32(len(panasonicLabel))
+	} else {
+		return 0, errors.New("putMakerNote: Unsupported maker note format")
+	}
+	next, err := node.IFD.Put(buf, order, pos, nil, 0)
+	if err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 // Serialize an IFD and all the other IFDs to which it refers into a
@@ -1199,28 +1333,38 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	// Write node's IFD at pos. But first write any IFDs that it
 	// refers to, recording their positions.
 	nsubs := len(node.SubIFDs)
-	subifds := make([]IFDpos, nsubs)
+	subpos := make([]IFDpos, nsubs)
 	next := pos + node.IFD.TotalSize()
 	var err error
 	for i := 0; i < nsubs; i++ {
 		next = Align(next)
-		subifds[i].Tag = node.SubIFDs[i].Tag
-		subifds[i].Pos = next
+		subpos[i].Tag = node.SubIFDs[i].Tag
+		subpos[i].Pos = next
+		if node.Space == ExifSpace && node.SubIFDs[i].Tag == makerNote {
+			var nextTmp uint32
+			nextTmp, err = node.SubIFDs[i].Node.putMakerNote(buf, next, order)
+			if err != nil {
+				return 0, err
+			}
+			subpos[i].Size = nextTmp - next
+			next = nextTmp
+			continue
+		}
 		next, err = node.SubIFDs[i].Node.PutIFDTree(buf, next, order)
 		if err != nil {
 			return 0, err
 		}
 	}
-	nodepos := uint32(0)
+	nextPos := uint32(0)
 	if node.Next != nil {
 		next = Align(next)
-		nodepos = next
+		nextPos = next
 		next, err = node.Next.PutIFDTree(buf, next, order)
 		if err != nil {
 			return 0, err
 		}
 	}
-	_, err = node.IFD.Put(buf, order, pos, subifds, nodepos)
+	_, err = node.IFD.Put(buf, order, pos, subpos, nextPos)
 	if err != nil {
 		return 0, err
 	}
