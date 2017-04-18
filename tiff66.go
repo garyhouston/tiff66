@@ -976,7 +976,7 @@ func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []I
 	var subifdPtr = make([]*IFDpos, 0, len(subifds))
 	for _, field := range ifd.Fields {
 		if field.Tag < lastTag {
-			return 0, errors.New(fmt.Sprintf("IFD_T.Put: tags are out of order, %d is followed by %d", lastTag, field.Tag))
+			return 0, errors.New(fmt.Sprintf("IFD_T.Put: tags are out of order, %d(0x%X) is followed by %d(0x%X)", lastTag, lastTag, field.Tag, field.Tag))
 		}
 		lastTag = field.Tag
 		order.PutUint16(buf[pos:], uint16(field.Tag))
