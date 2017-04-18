@@ -1371,12 +1371,13 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	return next, nil
 }
 
-// TIFF fixes: 1) TIFF allows a SHORT field to contain a pointer to
-// image data. This can fail if we write image data at a different
-// location in the file, so convert such fields to LONG. 2) Add
-// missing NUL terminators in ASCII field data. Additional fixes
-// may be added later.
+// TIFF fixes: *) Sort the fields into ascending Tag order *) TIFF
+// allows a SHORT field to contain a pointer to image data. This can
+// fail if we write image data at a different location in the file, so
+// convert such fields to LONG. *) Add missing NUL terminators in
+// ASCII field data. Additional fixes may be added later.
 func (ifd *IFD_T) Fix(order binary.ByteOrder, specs []ImageDataSpec) {
+	sort.Slice(ifd.Fields, func(i, j int) bool { return ifd.Fields[i].Tag < ifd.Fields[j].Tag })
 	for i := 0; i < len(ifd.Fields); i++ {
 		field := &ifd.Fields[i]
 		if field.Type == SHORT {
