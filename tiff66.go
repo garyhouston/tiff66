@@ -649,31 +649,6 @@ func (ifd IFD_T) Size() uint32 {
 	return 2 + uint32(len(ifd.Fields))*12 + 4
 }
 
-// Return the size of the external data of a TIFF IFD if was serialized.
-// Includes field data and image data, but not sub IFDs.
-func (ifd IFD_T) DataSize() uint32 {
-	var datasize uint32
-	for _, field := range ifd.Fields {
-		size := field.Size()
-		if size > 4 {
-			datasize += size
-		}
-	}
-	for _, id := range ifd.ImageData {
-		for _, seg := range id.Segments {
-			datasize += uint32(len(seg))
-		}
-	}
-	return datasize
-}
-
-// Return the size of an IFD and its external data if it was serialized.
-// External data includes field data and image data, but not sub IFDs or
-// maker note headers.
-func (ifd IFD_T) TotalSize() uint32 {
-	return ifd.Size() + ifd.DataSize()
-}
-
 // Return pointers to fields in the IFD that match the given tags. The
 // number of returned fields may be less than the number of tags, if
 // not all tags are found, or greater if there are duplicate tags
@@ -1284,24 +1259,49 @@ func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) 
 	return tree, err
 }
 
+// Return the serialized size of a node, including its IFD, external data,
+// image data, and maker note headers, but excluding other nodes to which
+// it refers.
+func (node IFDNode) Size() uint32 {
+	size := node.IFD.Size()
+	if node.Space == Panasonic1Space {
+		size += uint32(len(panasonicLabel))
+	}
+FIELDLOOP:
+	for _, field := range node.IFD.Fields {
+		if node.Space == ExifSpace && field.Tag == makerNote {
+			// Don't double-count maker note fields that will be
+			// serialized from sub-IFDs.
+			for i := 0; i < len(node.SubIFDs); i++ {
+				if node.SubIFDs[i].Tag == makerNote {
+					continue FIELDLOOP
+				}
+			}
+		}
+		fsize := field.Size()
+		if fsize > 4 {
+			size += fsize
+		}
+	}
+	for _, id := range node.IFD.ImageData {
+		for _, seg := range id.Segments {
+			size += uint32(len(seg))
+		}
+	}
+	return size
+}
+
 // Return the serialized size of a node and all the nodes to which it refers.
 // Includes all external data, image data, and maker note headers.
 func (node IFDNode) TreeSize() uint32 {
-	size := uint32(0)
+	size := node.Size()
 	for i := 0; i < len(node.SubIFDs); i++ {
+		size = Align(size)
 		size += node.SubIFDs[i].Node.TreeSize()
 	}
+	size = Align(size)
 	if node.Next != nil {
 		size += node.Next.TreeSize()
-	}
-	tsize := node.IFD.TotalSize()
-	if tsize/2*2 != tsize {
-		// Allow for a filler byte for word alignment.
-		tsize++
-	}
-	size += tsize
-	if node.Space == Panasonic1Space {
-		size += uint32(len(panasonicLabel))
 	}
 	return size
 
@@ -1334,7 +1334,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	// refers to, recording their positions.
 	nsubs := len(node.SubIFDs)
 	subpos := make([]IFDpos, nsubs)
-	next := pos + node.IFD.TotalSize()
+	next := pos + node.Size()
 	var err error
 	for i := 0; i < nsubs; i++ {
 		next = Align(next)
