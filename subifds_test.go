@@ -33,8 +33,8 @@ func TestSubIFDs(t *testing.T) {
 	node1.SubIFDs[0] = SubIFD{SubIFDs, &node2}
 	node1.SubIFDs[1] = SubIFD{SubIFDs, &node3}
 
-	buf := make([]byte, HeaderSize()+node1.TreeSize())
-	ifdpos := HeaderSize()
+	buf := make([]byte, HeaderSize+node1.TreeSize())
+	ifdpos := uint32(HeaderSize)
 	PutHeader(buf, order, ifdpos)
 	_, err := node1.PutIFDTree(buf, ifdpos, order)
 	if err != nil {
