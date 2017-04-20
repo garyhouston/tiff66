@@ -665,11 +665,9 @@ func (ifd IFD_T) FindFields(tags []Tag) []*Field {
 	return fields
 }
 
-// Return the size of a TIFF header.
-func HeaderSize() uint32 {
-	// byte order (2 bytes), magic number (2 bytes), IFD position (4 bytes)
-	return 8
-}
+// The size of a TIFF header.
+// byte order (2 bytes), magic number (2 bytes), IFD position (4 bytes)
+const HeaderSize = 8
 
 // Try to read a TIFF header from a slice. Returns an indication of
 // validity, the byte order, and the position of the 0th IFD.
