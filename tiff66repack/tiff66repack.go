@@ -27,11 +27,10 @@ func main() {
 		log.Fatal(err)
 	}
 	root.Fix(order)
-	headerSize := tiff.HeaderSize()
-	fileSize := headerSize + root.TreeSize()
+	fileSize := tiff.HeaderSize + root.TreeSize()
 	out := make([]byte, fileSize)
-	tiff.PutHeader(out, order, headerSize)
-	next, err := root.PutIFDTree(out, headerSize, order)
+	tiff.PutHeader(out, order, tiff.HeaderSize)
+	next, err := root.PutIFDTree(out, tiff.HeaderSize, order)
 	if err != nil {
 		log.Fatal(err)
 	}
