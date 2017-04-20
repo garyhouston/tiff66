@@ -12,7 +12,7 @@ The tiff66print program prints the IFDs (image file directories) and fields of a
 
 The tiff66repack program decodes a TIFF file and encodes it into a new file.
 
-The [Exif44]((https://github.com/garyhouston/exif44) library extends this library with additional support for Exif fields, and has corresponding print and repack programs.
+The [Exif44](https://github.com/garyhouston/exif44) library extends this library with additional support for Exif fields, and has corresponding print and repack programs.
 
 This library is still under construction and may change at any moment without backwards compatibility.
 
