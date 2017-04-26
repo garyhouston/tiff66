@@ -1067,6 +1067,7 @@ const (
 	Panasonic1Space TagSpace = 5
 )
 
+// Return the name of a tag namespace.
 func (space TagSpace) Name() string {
 	switch space {
 	case TIFFSpace:
@@ -1085,24 +1086,17 @@ func (space TagSpace) Name() string {
 	panic("TagSpace.Name: invalid value")
 }
 
-// TIFF IFD with links to subifds referred to from any field, and to the
-// next IFD, if any.
-type IFDNode struct {
-	IFD     IFD_T
-	Space   TagSpace
-	SubIFDs []SubIFD
-	Next    *IFDNode
+// Indicate if name space is for a maker note.
+func (space TagSpace) IsMakerNote() bool {
+	return space == Panasonic1Space
 }
-
-// TIFF subifd and the field in the parent that referred to it.
-type SubIFD struct {
-	Tag  Tag
-	Node *IFDNode
+	
+// Return the byte order for an IFD with given tag namespace, given a
+// default order for a TIFF IFD tree. It will usually be the same as the
+// default, but may differ for certain maker note IFDs.
+func (space TagSpace) ByteOrder(deforder binary.ByteOrder) binary.ByteOrder {
+	return deforder
 }
-
-// Fields in Exif IFDs that affect IFD structure.
-const interOpIFD = 0xA005
-const makerNote = 0x927C
 
 // Given a field 'tag' in a 'space' IFD which refers to a sub-IFD,
 // return the name space of the sub-IFD.
@@ -1124,6 +1118,25 @@ func SubSpace(space TagSpace, tag Tag) TagSpace {
 	}
 	return UnknownSpace
 }
+
+// TIFF IFD with links to subifds referred to from any field, and to the
+// next IFD, if any.
+type IFDNode struct {
+	IFD     IFD_T
+	Space   TagSpace
+	SubIFDs []SubIFD
+	Next    *IFDNode
+}
+
+// TIFF subifd and the field in the parent that referred to it.
+type SubIFD struct {
+	Tag  Tag
+	Node *IFDNode
+}
+
+// Fields in Exif IFDs that affect IFD structure.
+const interOpIFD = 0xA005
+const makerNote = 0x927C
 
 // Data needed for unpacking Exif maker notes.
 type makerNoteData struct {
@@ -1238,8 +1251,10 @@ func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error
 	return nil
 }
 
-// Read an IFD, and all the other IFDs to which it refers, starting
-// from a given position in a byte slice.
+// Create an IFDNode tree by reading an IFD and all the other IFDs to
+// which it refers. 'pos' is the position of the root IFD in the byte
+// slice. 'space' is the name space to assign to the root, usually
+// TIFFSpace.
 func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) (*IFDNode, error) {
 	ifdPositions := make(map[uint32]bool)
 	var maker makerNoteData
