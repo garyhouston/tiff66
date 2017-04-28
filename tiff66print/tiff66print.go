@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"flag"
 	"fmt"
 	tiff "github.com/garyhouston/tiff66"
@@ -10,7 +9,7 @@ import (
 	"os"
 )
 
-func printNode(node *tiff.IFDNode, order binary.ByteOrder, length uint32) {
+func printNode(node *tiff.IFDNode, length uint32) {
 	fmt.Println()
 	fields := node.Fields
 	fmt.Printf("%s IFD with %d ", node.Space.Name(), len(fields))
@@ -24,7 +23,7 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder, length uint32) {
 		names = tiff.TagNames
 	}
 	for i := 0; i < len(fields); i++ {
-		fields[i].Print(order, names, length)
+		fields[i].Print(node.Order, names, length)
 	}
 	imageData := node.ImageData
 	fmt.Println()
@@ -37,10 +36,10 @@ func printNode(node *tiff.IFDNode, order binary.ByteOrder, length uint32) {
 		}
 	}
 	for i := 0; i < len(node.SubIFDs); i++ {
-		printNode(node.SubIFDs[i].Node, order, length)
+		printNode(node.SubIFDs[i].Node, length)
 	}
 	if node.Next != nil {
-		printNode(node.Next, order, length)
+		printNode(node.Next, length)
 	}
 }
 
@@ -66,5 +65,5 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	printNode(root, order, uint32(length))
+	printNode(root, uint32(length))
 }
