@@ -624,7 +624,7 @@ type IFD_T struct {
 	// Usually, all IFDs in a TIFF file have the same byte order,
 	// specified at the start of the file. Certain maker notes use
 	// a fixed order instead.
-	Order     binary.ByteOrder 
+	Order     binary.ByteOrder
 	Fields    []Field
 	ImageData []ImageData
 }
@@ -1062,12 +1062,12 @@ type TagSpace uint8
 // TIFF files that use them, since they use the LONG data type instead
 // of the IFD data type.
 const (
-	TIFFSpace    TagSpace = 0
-	UnknownSpace TagSpace = 1
-	ExifSpace    TagSpace = 2
-	GPSSpace     TagSpace = 3
-	InteropSpace TagSpace = 4
-	MPFIndexSpace TagSpace = 5  // Multi-Picture Format.
+	TIFFSpace         TagSpace = 0
+	UnknownSpace      TagSpace = 1
+	ExifSpace         TagSpace = 2
+	GPSSpace          TagSpace = 3
+	InteropSpace      TagSpace = 4
+	MPFIndexSpace     TagSpace = 5 // Multi-Picture Format.
 	MPFAttributeSpace TagSpace = 6
 	// Maker notes below. If adding another, uses of
 	// Panasonic1Space in this file will indicate where support is
