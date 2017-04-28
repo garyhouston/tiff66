@@ -621,6 +621,10 @@ type ImageData struct {
 
 // Fields and image data for a single IFD.
 type IFD_T struct {
+	// Usually, all IFDs in a TIFF file have the same byte order,
+	// specified at the start of the file. Certain maker notes use
+	// a fixed order instead.
+	Order     binary.ByteOrder 
 	Fields    []Field
 	ImageData []ImageData
 }
@@ -811,6 +815,7 @@ type fieldProc func(uint16, *Field, uint32)
 // GetIFDError.
 func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec, fieldProc fieldProc) (IFD_T, uint32, error) {
 	var ifd IFD_T
+	ifd.Order = order
 	ifdpos := pos
 	bufsize := uint32(len(buf))
 	if pos+2 > bufsize {
@@ -932,7 +937,8 @@ func putImageData(buf []byte, ifd IFD_T, pos uint32, order binary.ByteOrder) (ui
 // specification. 'subifds' supplies the positions of any subIFDs
 // refered to by fields in this IFD. 'next' supplies the position of
 // the next IFD, or 0 if none.
-func (ifd IFD_T) Put(buf []byte, order binary.ByteOrder, pos uint32, subifds []IFDpos, nextptr uint32) (uint32, error) {
+func (ifd IFD_T) Put(buf []byte, pos uint32, subifds []IFDpos, nextptr uint32) (uint32, error) {
+	order := ifd.Order
 	if pos/2*2 != pos {
 		return 0, errors.New("IFD_T.Put: pos is not word aligned")
 	}
@@ -1321,14 +1327,14 @@ func (node IFDNode) TreeSize() uint32 {
 }
 
 // Put a maker note into a buffer at pos. Returns the next data position.
-func (node IFDNode) putMakerNote(buf []byte, pos uint32, order binary.ByteOrder) (uint32, error) {
+func (node IFDNode) putMakerNote(buf []byte, pos uint32) (uint32, error) {
 	if node.Space == Panasonic1Space {
 		copy(buf[pos:], panasonicLabel)
 		pos += uint32(len(panasonicLabel))
 	} else {
 		return 0, errors.New("putMakerNote: Unsupported maker note format")
 	}
-	next, err := node.IFD_T.Put(buf, order, pos, nil, 0)
+	next, err := node.IFD_T.Put(buf, pos, nil, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -1342,7 +1348,7 @@ func (node IFDNode) putMakerNote(buf []byte, pos uint32, order binary.ByteOrder)
 // large for the new data. 'pos' must be word (2 byte) aligned and the
 // tags in the IFDs must be in assending order, according to the TIFF
 // specification.
-func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (uint32, error) {
+func (node IFDNode) PutIFDTree(buf []byte, pos uint32) (uint32, error) {
 	// Write node's IFD at pos. But first write any IFDs that it
 	// refers to, recording their positions.
 	nsubs := len(node.SubIFDs)
@@ -1355,7 +1361,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 		subpos[i].Pos = next
 		if node.Space == ExifSpace && node.SubIFDs[i].Tag == makerNote {
 			var nextTmp uint32
-			nextTmp, err = node.SubIFDs[i].Node.putMakerNote(buf, next, order)
+			nextTmp, err = node.SubIFDs[i].Node.putMakerNote(buf, next)
 			if err != nil {
 				return 0, err
 			}
@@ -1363,7 +1369,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 			next = nextTmp
 			continue
 		}
-		next, err = node.SubIFDs[i].Node.PutIFDTree(buf, next, order)
+		next, err = node.SubIFDs[i].Node.PutIFDTree(buf, next)
 		if err != nil {
 			return 0, err
 		}
@@ -1372,12 +1378,12 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 	if node.Next != nil {
 		next = Align(next)
 		nextPos = next
-		next, err = node.Next.PutIFDTree(buf, next, order)
+		next, err = node.Next.PutIFDTree(buf, next)
 		if err != nil {
 			return 0, err
 		}
 	}
-	_, err = node.IFD_T.Put(buf, order, pos, subpos, nextPos)
+	_, err = node.IFD_T.Put(buf, pos, subpos, nextPos)
 	if err != nil {
 		return 0, err
 	}
@@ -1389,7 +1395,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 // fail if we write image data at a different location in the file, so
 // convert such fields to LONG. *) Add missing NUL terminators in
 // ASCII field data. Additional fixes may be added later.
-func (ifd *IFD_T) Fix(order binary.ByteOrder, specs []ImageDataSpec) {
+func (ifd *IFD_T) Fix(specs []ImageDataSpec) {
 	sort.Slice(ifd.Fields, func(i, j int) bool { return ifd.Fields[i].Tag < ifd.Fields[j].Tag })
 	for i := 0; i < len(ifd.Fields); i++ {
 		field := &ifd.Fields[i]
@@ -1398,12 +1404,12 @@ func (ifd *IFD_T) Fix(order binary.ByteOrder, specs []ImageDataSpec) {
 				if specs[j].OffsetTag == field.Tag {
 					offsets := make([]uint32, field.Count)
 					for k := uint32(0); k < field.Count; k++ {
-						offsets[k] = uint32(field.Short(k, order))
+						offsets[k] = uint32(field.Short(k, ifd.Order))
 					}
 					field.Type = LONG
 					field.Data = make([]byte, 4*field.Count)
 					for k := uint32(0); k < field.Count; k++ {
-						field.PutLong(offsets[k], k, order)
+						field.PutLong(offsets[k], k, ifd.Order)
 					}
 					break
 				}
@@ -1420,16 +1426,16 @@ func (ifd *IFD_T) Fix(order binary.ByteOrder, specs []ImageDataSpec) {
 }
 
 // Apply IFD fixes to all IFDs in a tree.
-func (node *IFDNode) Fix(order binary.ByteOrder) {
+func (node *IFDNode) Fix() {
 	var specs []ImageDataSpec
 	if node.Space == TIFFSpace {
 		specs = TIFFImageData
 	}
-	node.IFD_T.Fix(order, specs)
+	node.IFD_T.Fix(specs)
 	for i := 0; i < len(node.SubIFDs); i++ {
-		node.SubIFDs[i].Node.Fix(order)
+		node.SubIFDs[i].Node.Fix()
 	}
 	if node.Next != nil {
-		node.Next.Fix(order)
+		node.Next.Fix()
 	}
 }
