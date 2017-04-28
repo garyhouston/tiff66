@@ -1090,7 +1090,7 @@ func (space TagSpace) Name() string {
 func (space TagSpace) IsMakerNote() bool {
 	return space == Panasonic1Space
 }
-	
+
 // Return the byte order for an IFD with given tag namespace, given a
 // default order for a TIFF IFD tree. It will usually be the same as the
 // default, but may differ for certain maker note IFDs.
@@ -1122,7 +1122,7 @@ func SubSpace(space TagSpace, tag Tag) TagSpace {
 // TIFF IFD with links to subifds referred to from any field, and to the
 // next IFD, if any.
 type IFDNode struct {
-	IFD     IFD_T
+	IFD_T
 	Space   TagSpace
 	SubIFDs []SubIFD
 	Next    *IFDNode
@@ -1170,13 +1170,13 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			}
 		}
 	}
-	node.IFD, next, err = GetIFD(buf, order, pos, specs, fieldProc)
+	node.IFD_T, next, err = GetIFD(buf, order, pos, specs, fieldProc)
 	if err != nil {
 		return nil, err
 	}
 	subnum := uint32(0)
 	node.SubIFDs = make([]SubIFD, 0, 10)
-	for i, field := range node.IFD.Fields {
+	for i, field := range node.Fields {
 		if field.IsIFD(node.Space) {
 			// Generally, a field references a single IFD, but
 			// SubIFDs can point to multiple IFDs.
@@ -1184,7 +1184,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			for j := uint32(0); j < field.Count; j++ {
 				subspace := SubSpace(node.Space, field.Tag)
 				var sub SubIFD
-				sub.Tag = node.IFD.Fields[i].Tag
+				sub.Tag = node.Fields[i].Tag
 				sub.Node, err = getIFDTreeIter(buf, order, field.Long(j, order), subspace, maker, ifdPositions)
 				if err != nil {
 					return nil, err
@@ -1235,7 +1235,7 @@ func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error
 	if bytes.HasPrefix(buf[maker.position:], panasonicLabel) {
 		var node IFDNode
 		var err error
-		node.IFD, _, err = GetIFD(buf, order, maker.position+uint32(len(panasonicLabel)), nil, nil)
+		node.IFD_T, _, err = GetIFD(buf, order, maker.position+uint32(len(panasonicLabel)), nil, nil)
 		if err != nil {
 			return err
 		}
@@ -1276,12 +1276,12 @@ func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) 
 // image data, and maker note headers, but excluding other nodes to which
 // it refers.
 func (node IFDNode) Size() uint32 {
-	size := node.IFD.Size()
+	size := node.IFD_T.Size()
 	if node.Space == Panasonic1Space {
 		size += uint32(len(panasonicLabel))
 	}
 FIELDLOOP:
-	for _, field := range node.IFD.Fields {
+	for _, field := range node.Fields {
 		if node.Space == ExifSpace && field.Tag == makerNote {
 			// Don't double-count maker note fields that will be
 			// serialized from sub-IFDs.
@@ -1296,7 +1296,7 @@ FIELDLOOP:
 			size += fsize
 		}
 	}
-	for _, id := range node.IFD.ImageData {
+	for _, id := range node.ImageData {
 		for _, seg := range id.Segments {
 			size += uint32(len(seg))
 		}
@@ -1328,7 +1328,7 @@ func (node IFDNode) putMakerNote(buf []byte, pos uint32, order binary.ByteOrder)
 	} else {
 		return 0, errors.New("putMakerNote: Unsupported maker note format")
 	}
-	next, err := node.IFD.Put(buf, order, pos, nil, 0)
+	next, err := node.IFD_T.Put(buf, order, pos, nil, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -1377,7 +1377,7 @@ func (node IFDNode) PutIFDTree(buf []byte, pos uint32, order binary.ByteOrder) (
 			return 0, err
 		}
 	}
-	_, err = node.IFD.Put(buf, order, pos, subpos, nextPos)
+	_, err = node.IFD_T.Put(buf, order, pos, subpos, nextPos)
 	if err != nil {
 		return 0, err
 	}
@@ -1425,7 +1425,7 @@ func (node *IFDNode) Fix(order binary.ByteOrder) {
 	if node.Space == TIFFSpace {
 		specs = TIFFImageData
 	}
-	node.IFD.Fix(order, specs)
+	node.IFD_T.Fix(order, specs)
 	for i := 0; i < len(node.SubIFDs); i++ {
 		node.SubIFDs[i].Node.Fix(order)
 	}
