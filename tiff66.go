@@ -1067,10 +1067,12 @@ const (
 	ExifSpace    TagSpace = 2
 	GPSSpace     TagSpace = 3
 	InteropSpace TagSpace = 4
+	MPFIndexSpace TagSpace = 5  // Multi-Picture Format.
+	MPFAttributeSpace TagSpace = 6
 	// Maker notes below. If adding another, uses of
 	// Panasonic1Space in this file will indicate where support is
 	// needed.
-	Panasonic1Space TagSpace = 5
+	Panasonic1Space TagSpace = 7
 )
 
 // Return the name of a tag namespace.
@@ -1084,6 +1086,10 @@ func (space TagSpace) Name() string {
 		return "GPS"
 	case InteropSpace:
 		return "Interop"
+	case MPFIndexSpace:
+		return "MPFIndexSpace"
+	case MPFAttributeSpace:
+		return "MPFAttributeSpace"
 	case Panasonic1Space:
 		return "Panasonic-1"
 	case UnknownSpace:
@@ -1221,6 +1227,8 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 			// The next IFD after an Exif IFD is a thumbnail
 			// encoded as TIFF.
 			space = TIFFSpace
+		} else if node.Space == MPFIndexSpace {
+			space = MPFAttributeSpace
 		} else {
 			// Assume the next IFD is the same type.
 			space = node.Space
