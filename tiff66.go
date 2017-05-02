@@ -735,7 +735,7 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) (
 					size = 64
 				case JPEGDCTables, JPEGACTables:
 					offset = specF[i].offsetField.Long(j, order)
-					if offset+15 >= bufsize {
+					if offset+15 < offset || offset+15 >= bufsize {
 						return nil, &GetIFDError{4, 0, 0, specF[i].offsetField.Tag}
 					}
 					numvals := uint32(0)
@@ -750,7 +750,7 @@ func getImageData(buf []byte, specF []imageDataFields, order binary.ByteOrder) (
 					}
 				}
 				if size > 0 {
-					if offset+size-1 > bufsize {
+					if offset+size-1 < offset || offset+size-1 > bufsize {
 						return nil, &GetIFDError{4, 0, 0, specF[i].offsetField.Tag}
 					}
 					segments[j] = buf[offset : offset+size]
@@ -818,7 +818,7 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 	ifd.Order = order
 	ifdpos := pos
 	bufsize := uint32(len(buf))
-	if pos+2 > bufsize {
+	if pos+2 < pos || pos+2 > bufsize {
 		return ifd, 0, GetIFDError{ErrIFDPos, ifdpos, 0, 0}
 	}
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
@@ -827,7 +827,7 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 	}
 	fields := make([]Field, entries)
 	ifd.Fields = fields
-	if pos+ifd.Size() > bufsize {
+	if pos+ifd.Size() < pos || pos+ifd.Size() > bufsize {
 		ifd.Fields = nil
 		return ifd, 0, GetIFDError{ErrIFDTruncated, ifdpos, entries, 0}
 	}
@@ -844,7 +844,7 @@ func GetIFD(buf []byte, order binary.ByteOrder, pos uint32, spec []ImageDataSpec
 		dataPos := pos
 		if size > 4 {
 			dataPos = order.Uint32(buf[pos:])
-			if dataPos+size-1 > bufsize {
+			if dataPos+size-1 < dataPos || dataPos+size-1 > bufsize {
 				return ifd, 0, GetIFDError{ErrFieldData, ifdpos, entries, fields[i].Tag}
 			}
 		}
