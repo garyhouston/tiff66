@@ -1073,6 +1073,7 @@ const (
 	// Panasonic1Space in this file will indicate where support is
 	// needed.
 	Panasonic1Space TagSpace = 7
+	Nikon1Space     TagSpace = 8
 )
 
 // Return the name of a tag namespace.
@@ -1092,6 +1093,8 @@ func (space TagSpace) Name() string {
 		return "MPFAttributeSpace"
 	case Panasonic1Space:
 		return "Panasonic-1"
+	case Nikon1Space:
+		return "Nikon-1"
 	case UnknownSpace:
 		return "Unknown"
 	}
@@ -1100,7 +1103,7 @@ func (space TagSpace) Name() string {
 
 // Indicate if name space is for a maker note.
 func (space TagSpace) IsMakerNote() bool {
-	return space == Panasonic1Space
+	return space == Panasonic1Space || space == Nikon1Space
 }
 
 // Return the byte order for an IFD with given tag namespace, given a
@@ -1242,6 +1245,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 }
 
 var panasonicLabel = []byte("Panasonic\000\000\000")
+var nikon1Label = []byte("Nikon\000\001\000")
 
 // Unpack maker note data, and append its IFD to SubIFDs in the Exif node.
 func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error {
@@ -1254,6 +1258,15 @@ func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error
 			return err
 		}
 		node.Space = Panasonic1Space
+		makerNode = &node
+	} else if bytes.HasPrefix(buf[maker.position:], nikon1Label) {
+		var node IFDNode
+		var err error
+		node.IFD_T, _, err = GetIFD(buf, order, maker.position+uint32(len(nikon1Label)), nil, nil)
+		if err != nil {
+			return err
+		}
+		node.Space = Nikon1Space
 		makerNode = &node
 	}
 	if makerNode != nil {
@@ -1293,6 +1306,8 @@ func (node IFDNode) Size() uint32 {
 	size := node.IFD_T.Size()
 	if node.Space == Panasonic1Space {
 		size += uint32(len(panasonicLabel))
+	} else if node.Space == Nikon1Space {
+		size += uint32(len(nikon1Label))
 	}
 FIELDLOOP:
 	for _, field := range node.Fields {
@@ -1339,6 +1354,9 @@ func (node IFDNode) putMakerNote(buf []byte, pos uint32) (uint32, error) {
 	if node.Space == Panasonic1Space {
 		copy(buf[pos:], panasonicLabel)
 		pos += uint32(len(panasonicLabel))
+	} else if node.Space == Nikon1Space {
+		copy(buf[pos:], nikon1Label)
+		pos += uint32(len(nikon1Label))
 	} else {
 		return 0, errors.New("putMakerNote: Unsupported maker note format")
 	}
