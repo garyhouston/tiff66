@@ -185,8 +185,9 @@ const (
 	YCbCrSubSampling            = 0x212
 	YCbCrPositioning            = 0x213
 	ReferenceBlackWhite         = 0x214
-	XMP                         = 0x2BC // XMP part 3
-	ImageID                     = 0x800 // Supplement 1
+	XMP                         = 0x2BC  // XMP part 3
+	ImageID                     = 0x800  // Supplement 1
+	PrintIM                     = 0xC4A5 // Epson print image matching
 	Copyright                   = 0x8298
 	ModelPixelScaleTag          = 0x830E // GeoTIFF
 	IPTC                        = 0x83BB // Mentioned in XMP part 3
@@ -289,6 +290,7 @@ var TagNames = map[Tag]string{
 	ReferenceBlackWhite:         "ReferenceBlackWhite",
 	XMP:                         "XMP",
 	ImageID:                     "ImageID",
+	PrintIM:                     "PrintIM",
 	Copyright:                   "Copyright",
 	ModelPixelScaleTag:          "ModelPixelScaleTag",
 	IPTC:                        "IPTC",
