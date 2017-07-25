@@ -12,14 +12,15 @@ import (
 func printNode(node *tiff.IFDNode, length uint32) {
 	fmt.Println()
 	fields := node.Fields
-	fmt.Printf("%s IFD with %d ", node.Space.Name(), len(fields))
+	space := node.GetSpace()
+	fmt.Printf("%s IFD with %d ", space.Name(), len(fields))
 	if len(fields) > 1 {
 		fmt.Println("entries:")
 	} else {
 		fmt.Println("entry:")
 	}
 	var names map[tiff.Tag]string
-	if node.Space == tiff.TIFFSpace {
+	if space == tiff.TIFFSpace {
 		names = tiff.TagNames
 	}
 	for i := 0; i < len(fields); i++ {

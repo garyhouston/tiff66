@@ -27,13 +27,16 @@ func TestSubIFDs(t *testing.T) {
 	ifd3.Fields[0].Data = make([]byte, 2)
 	ifd3.Fields[0].PutShort(2, 0, ifd3.Order)
 
-	node1 := IFDNode{ifd1, TIFFSpace, nil, nil}
-	node2 := IFDNode{ifd2, TIFFSpace, nil, nil}
-	node3 := IFDNode{ifd3, TIFFSpace, nil, nil}
+	node1 := NewIFDNodeTIFF(TIFFSpace)
+	node1.IFD_T = ifd1
+	node2 := NewIFDNodeTIFF(TIFFSpace)
+	node2.IFD_T = ifd2
+	node3 := NewIFDNodeTIFF(TIFFSpace)
+	node3.IFD_T = ifd3
 
 	node1.SubIFDs = make([]SubIFD, 2)
-	node1.SubIFDs[0] = SubIFD{SubIFDs, &node2}
-	node1.SubIFDs[1] = SubIFD{SubIFDs, &node3}
+	node1.SubIFDs[0] = SubIFD{SubIFDs, node2}
+	node1.SubIFDs[1] = SubIFD{SubIFDs, node3}
 
 	buf := make([]byte, HeaderSize+node1.TreeSize())
 	ifdpos := uint32(HeaderSize)
