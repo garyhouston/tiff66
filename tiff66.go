@@ -681,8 +681,11 @@ const HeaderSize = 8
 // Try to read a TIFF header from a slice. Returns an indication of
 // validity, the byte order, and the position of the 0th IFD.
 func GetHeader(buf []byte) (bool, binary.ByteOrder, uint32) {
-	pos := uint32(0)
 	var order binary.ByteOrder
+	if len(buf) < HeaderSize {
+		return false, order, 0
+	}
+	pos := uint32(0)
 	if buf[pos] == 0x49 && buf[pos+1] == 0x49 {
 		order = binary.LittleEndian
 	} else if buf[pos] == 0x4d && buf[pos+1] == 0x4d {
@@ -1295,7 +1298,7 @@ type SubIFD struct {
 
 // Create a new TIFF IFDNode with a given name space (not for maker notes).
 func NewIFDNodeTIFF(space TagSpace) *IFDNode {
-	return &IFDNode{SpaceRec:TIFFSpaceRec{space}}
+	return &IFDNode{SpaceRec: TIFFSpaceRec{space}}
 }
 
 // Fields in Exif IFDs that affect IFD structure.
