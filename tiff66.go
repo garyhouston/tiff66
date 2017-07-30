@@ -530,8 +530,12 @@ func (f Field) PutAnyFloat(val float64, i uint32, order binary.ByteOrder) {
 // Return an ASCII field data as a string. It omits the terminating NUL if
 // present but retains any other NULs.
 func (f Field) ASCII() string {
-	if f.Data[len(f.Data)-1] == 0 {
-		return string(f.Data[:len(f.Data)-1])
+	l := len(f.Data)
+	if l == 0 {
+		return ""
+	}
+	if f.Data[l-1] == 0 {
+		return string(f.Data[:l-1])
 	} else {
 		return string(f.Data)
 	}
