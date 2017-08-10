@@ -1084,11 +1084,12 @@ const (
 	// Maker notes below. If adding another, uses of
 	// Panasonic1Space in this file will indicate where support is
 	// needed.
-	Nikon1Space        TagSpace = 7
-	Nikon2Space        TagSpace = 8
-	Nikon2PreviewSpace TagSpace = 9
-	Nikon2ScanSpace    TagSpace = 10
-	Panasonic1Space    TagSpace = 11
+	Canon1Space        TagSpace = 7
+	Nikon1Space        TagSpace = 8
+	Nikon2Space        TagSpace = 9
+	Nikon2PreviewSpace TagSpace = 10
+	Nikon2ScanSpace    TagSpace = 11
+	Panasonic1Space    TagSpace = 12
 )
 
 // Return the name of a tag namespace.
@@ -1106,6 +1107,8 @@ func (space TagSpace) Name() string {
 		return "MPFIndex"
 	case MPFAttributeSpace:
 		return "MPFAttribute"
+	case Canon1Space:
+		return "Canon1"
 	case Nikon1Space:
 		return "Nikon1"
 	case Nikon2Space:
@@ -1183,6 +1186,26 @@ func (TIFFSpaceRec) Size(node IFDNode) uint32 {
 }
 
 func (TIFFSpaceRec) PutIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	return node.putIFDTreeTIFF(buf, pos)
+}
+
+// SpaceRec for Canon1 maker notes.
+type Canon1SpaceRec struct {
+}
+
+func (Canon1SpaceRec) GetSpace() TagSpace {
+	return Canon1Space
+}
+
+func (Canon1SpaceRec) IsMakerNote() bool {
+	return true
+}
+
+func (Canon1SpaceRec) Size(node IFDNode) uint32 {
+	return node.sizeTIFF()
+}
+
+func (Canon1SpaceRec) PutIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	return node.putIFDTreeTIFF(buf, pos)
 }
 
@@ -1403,6 +1426,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, space TagSpa
 // Unpack maker note data, and append its IFD to SubIFDs in the Exif node.
 func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error {
 	var makerNode *IFDNode
+	lcMake := strings.ToLower(maker.make)
 	switch {
 	case bytes.HasPrefix(buf[maker.position:], nikon1Label):
 		var node IFDNode
@@ -1440,7 +1464,7 @@ func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error
 		// Didn't recognize any maker note label above. Assume the
 		// maker note is appropriate for the camera make and/or model.
 
-	case strings.HasPrefix(strings.ToLower(maker.make), "nikon"):
+	case strings.HasPrefix(lcMake, "nikon"):
 		// Unlabelled maker notes can be produced by early cameras like
 		// Coolpix 775 and 990. Like Nikon1 maker notes above, there's
 		// no separate TIFF header, but they use the Nikon2 tags.
@@ -1462,6 +1486,13 @@ func getMakerNote(buf []byte, order binary.ByteOrder, maker makerNoteData) error
 		if len(fields) == 1 && fields[0].Type == UNDEFINED && fields[0].Count == 4 {
 			makerNode = node
 		}
+	case strings.HasPrefix(lcMake, "canon"):
+		node, err := GetIFDTree(buf, order, maker.position, Canon1Space)
+		if err != nil {
+			return err
+		}
+		node.SpaceRec = &Canon1SpaceRec{}
+		makerNode = node
 	}
 	if makerNode != nil {
 		var sub SubIFD
