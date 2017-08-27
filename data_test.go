@@ -8,11 +8,11 @@ import (
 
 // Test the get/put functions.
 func doOrder(t *testing.T, order binary.ByteOrder) {
-	var ifd IFD_T
-	ifd.Fields = make([]Field, 1)
-	ifd.Fields[0] = Field{Compression, BYTE, 1, nil}
-	field := &ifd.Fields[0]
+	node := NewIFDNode(TIFFSpace)
+	node.Fields = make([]Field, 1)
+	field := Field{Compression, BYTE, 1, nil}
 	field.Data = make([]byte, 16)
+	node.Fields[0] = field
 	pos := uint32(1)
 	{
 		val := uint8(42)

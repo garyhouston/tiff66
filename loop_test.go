@@ -9,25 +9,25 @@ import (
 // Create a TIFF buffer where one IFD refers to another and vice versa, and
 // check that reading it back gives an error.
 func TestLoop(t *testing.T) {
-	var ifd1 IFD_T
-	ifd1.Order = binary.LittleEndian
-	ifd1.Fields = make([]Field, 1)
-	ifd1.Fields[0] = Field{Compression, BYTE, 1, nil}
-	ifd1.Fields[0].Data = []byte("\001")
-	var ifd2 IFD_T
-	ifd2.Order = ifd1.Order
-	ifd2.Fields = make([]Field, 1)
-	ifd2.Fields[0] = ifd1.Fields[0]
-	ifdsize := ifd1.Size() // ifd contains no external data
+	node1 := NewIFDNode(TIFFSpace)
+	node2 := NewIFDNode(TIFFSpace)
+	node1.Order = binary.LittleEndian
+	node1.Fields = make([]Field, 1)
+	node1.Fields[0] = Field{Compression, BYTE, 1, nil}
+	node1.Fields[0].Data = []byte("\001")
+	node2.Order = node1.Order
+	node2.Fields = make([]Field, 1)
+	node2.Fields[0] = node1.Fields[0]
+	ifdsize := node1.TableSize() // ifd contains no external data
 	buf := make([]byte, HeaderSize+2*ifdsize)
 	ifd1pos := uint32(HeaderSize)
 	ifd2pos := ifd1pos + ifdsize
-	PutHeader(buf, ifd1.Order, ifd1pos)
-	_, err := ifd1.Put(buf, ifd1pos, nil, ifd2pos)
+	PutHeader(buf, node1.Order, ifd1pos)
+	_, err := node1.put(buf, ifd1pos, nil, ifd2pos)
 	if err != nil {
 		t.Error("Failed to put ifd1")
 	}
-	_, err = ifd2.Put(buf, ifd2pos, nil, ifd1pos)
+	_, err = node2.put(buf, ifd2pos, nil, ifd1pos)
 	if err != nil {
 		t.Error("Failed to put ifd2")
 	}
@@ -36,7 +36,7 @@ func TestLoop(t *testing.T) {
 		t.Error("Header not valid")
 	}
 	_, err = GetIFDTree(buf, getorder, getpos, TIFFSpace)
-	if err == nil || !strings.Contains(err.Error(), "loop detected") {
-		t.Error("Failed to detect loop")
+	if err == nil || !strings.Contains(err.Error(), "cycle detected") {
+		t.Error("Failed to detect cycle")
 	}
 }

@@ -9,30 +9,26 @@ import (
 // referencing two other IFDs, and check that it's read back
 // correctly.
 func TestSubIFDs(t *testing.T) {
-	var ifd1, ifd2, ifd3 IFD_T
-	ifd1.Order = binary.LittleEndian
-	ifd1.Fields = make([]Field, 1)
-	ifd1.Fields[0] = Field{SubIFDs, IFD, 2, nil}
-	ifd1.Fields[0].Data = make([]byte, 8)
+	node1 := NewIFDNode(TIFFSpace)
+	node2 := NewIFDNode(TIFFSpace)
+	node3 := NewIFDNode(TIFFSpace)
 
-	ifd2.Order = ifd1.Order
-	ifd2.Fields = make([]Field, 1)
-	ifd2.Fields[0] = Field{Compression, SHORT, 1, nil}
-	ifd2.Fields[0].Data = make([]byte, 2)
-	ifd2.Fields[0].PutShort(1, 0, ifd2.Order)
+	node1.Order = binary.LittleEndian
+	node1.Fields = make([]Field, 1)
+	node1.Fields[0] = Field{SubIFDs, IFD, 2, nil}
+	node1.Fields[0].Data = make([]byte, 8)
 
-	ifd3.Order = ifd1.Order
-	ifd3.Fields = make([]Field, 1)
-	ifd3.Fields[0] = Field{Compression, SHORT, 1, nil}
-	ifd3.Fields[0].Data = make([]byte, 2)
-	ifd3.Fields[0].PutShort(2, 0, ifd3.Order)
+	node2.Order = node1.Order
+	node2.Fields = make([]Field, 1)
+	node2.Fields[0] = Field{Compression, SHORT, 1, nil}
+	node2.Fields[0].Data = make([]byte, 2)
+	node2.Fields[0].PutShort(1, 0, node2.Order)
 
-	node1 := NewIFDNodeTIFF(TIFFSpace)
-	node1.IFD_T = ifd1
-	node2 := NewIFDNodeTIFF(TIFFSpace)
-	node2.IFD_T = ifd2
-	node3 := NewIFDNodeTIFF(TIFFSpace)
-	node3.IFD_T = ifd3
+	node3.Order = node1.Order
+	node3.Fields = make([]Field, 1)
+	node3.Fields[0] = Field{Compression, SHORT, 1, nil}
+	node3.Fields[0].Data = make([]byte, 2)
+	node3.Fields[0].PutShort(2, 0, node3.Order)
 
 	node1.SubIFDs = make([]SubIFD, 2)
 	node1.SubIFDs[0] = SubIFD{SubIFDs, node2}
@@ -40,7 +36,7 @@ func TestSubIFDs(t *testing.T) {
 
 	buf := make([]byte, HeaderSize+node1.TreeSize())
 	ifdpos := uint32(HeaderSize)
-	PutHeader(buf, ifd1.Order, ifdpos)
+	PutHeader(buf, node1.Order, ifdpos)
 	_, err := node1.PutIFDTree(buf, ifdpos)
 	if err != nil {
 		t.Error(err)
@@ -49,7 +45,7 @@ func TestSubIFDs(t *testing.T) {
 	if !valid {
 		t.Error("Header not valid")
 	}
-	if getorder != ifd1.Order {
+	if getorder != node1.Order {
 		t.Error("Order incorrect")
 	}
 	if getpos != ifdpos {
