@@ -26,14 +26,18 @@ func printNode(node *tiff.IFDNode, length uint32) {
 	for i := 0; i < len(fields); i++ {
 		fields[i].Print(node.Order, names, length)
 	}
-	imageData := node.ImageData
 	fmt.Println()
+	imageData := node.GetImageData()
 	if len(imageData) == 0 {
 		fmt.Println("No image data")
 	} else {
 		fmt.Println("Image data:")
 		for _, id := range imageData {
-			fmt.Printf("%s[0] has length %d\n", tiff.TagNames[id.OffsetTag], len(id.Segments[0]))
+			entry := "entry"
+			if len(id.Segments) != 1 {
+				entry = "entries"
+			}
+			fmt.Printf("%s has %d %s, first has length %d\n", tiff.TagNames[id.OffsetTag], len(id.Segments), entry, len(id.Segments[0]))
 		}
 	}
 	for i := 0; i < len(node.SubIFDs); i++ {
