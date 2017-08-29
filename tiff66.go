@@ -773,15 +773,6 @@ func (node IFDNode) TreeSize() uint32 {
 
 }
 
-// Return ImageData, may be found in TIFF nodes.
-func (node IFDNode) GetImageData() []ImageData {
-	rec, ok := node.SpaceRec.(*TIFFSpaceRec)
-	if !ok {
-		return nil
-	}
-	return rec.GetImageData()
-}
-
 // Return pointers to fields in the IFD that match the given tags. The
 // number of returned fields may be less than the number of tags, if
 // not all tags are found, or greater if there are duplicate tags
@@ -1038,6 +1029,10 @@ type SpaceRec interface {
 	takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error)
 	getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error
 	putIFDTree(IFDNode, []byte, uint32) (uint32, error)
+	// Return ImageData, which can be the arrays of scan data that may be
+	// found in TIFF nodes, or any other data that's specified with
+	// pointers instead of arrays.
+	GetImageData() []ImageData
 }
 
 // Allocate a new SpaceRec for given tag space.
@@ -1053,6 +1048,8 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 		return &Nikon1SpaceRec{}
 	case Nikon2Space:
 		return &Nikon2SpaceRec{}
+	case Nikon2PreviewSpace:
+		return &Nikon2PreviewSpaceRec{}
 	case Olympus1Space:
 		return &Olympus1SpaceRec{}
 	case Panasonic1Space:
@@ -1114,6 +1111,10 @@ func (*GenericSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32
 	return node.genericPutIFDTree(buf, pos)
 }
 
+func (*GenericSpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 var tiffOffsetTags = []Tag{StripOffsets, TileOffsets, FreeOffsets, JPEGInterchangeFormat}
 var tiffSizeTags = []Tag{StripByteCounts, TileByteCounts, FreeByteCounts, JPEGInterchangeFormatLength}
 const tiffNumTags = 4
@@ -1138,19 +1139,28 @@ func (*TIFFSpaceRec) nodeSize(node IFDNode) uint32 {
 	return node.genericSize()
 }
 
-// Store image data in the TIFF space rec.
-func (rec *TIFFSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) error {
+func newImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) (*ImageData, error) {
 	segments := make([]ImageSegment, offsetField.Count)
 	for i := uint32(0); i < offsetField.Count; i++ {
 		offset := uint32(offsetField.AnyInteger(i, order))
 		size := uint32(sizeField.AnyInteger(i, order))
 		bufsize := uint32(len(buf))
 		if offset+size < offset || offset+size > bufsize {
-			return &GetIFDError{4, 0, 0, offsetField.Tag}
+			return nil, &GetIFDError{4, 0, 0, offsetField.Tag}
 		}
 		segments[i] = buf[offset : offset+size]
 	}
-	rec.imageData = append(rec.imageData, ImageData{offsetField.Tag, sizeField.Tag, segments})
+	return &ImageData{offsetField.Tag, sizeField.Tag, segments}, nil
+}
+
+
+// Store image data in the TIFF space rec.
+func (rec *TIFFSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) error {
+	imageData, err := newImageData(buf, order, offsetField, sizeField)
+	if err != nil {
+		return err
+	}
+	rec.imageData = append(rec.imageData, *imageData)
 	return nil
 }
 
@@ -1316,6 +1326,10 @@ func (*ExifSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, e
 	return node.genericPutIFDTree(buf, pos)
 }
 
+func (*ExifSpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 // SpaceRec for Canon1 maker notes.
 type Canon1SpaceRec struct {
 }
@@ -1344,6 +1358,10 @@ func (*Canon1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32,
 	return node.genericPutIFDTree(buf, pos)
 }
 
+func (*Canon1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 // SpaceRec for Nikon1 maker notes.
 type Nikon1SpaceRec struct {
 }
@@ -1376,6 +1394,10 @@ func (*Nikon1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32,
 	return node.genericPutIFDTree(buf, pos)
 }
 
+func (*Nikon1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 // Fields in Nikon2 IFD.
 const nikon2PreviewIFD = 0x11
 const nikon2NikonScanIFD = 0xE10
@@ -1468,6 +1490,72 @@ func (rec *Nikon2SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uin
 	return pos + next, nil
 }
 
+func (rec *Nikon2SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
+const nikon2PreviewImageStart  = 0x201
+const nikon2PreviewImageLength = 0x202
+
+// SpaceRec for Nikon2 Preview IFDs.
+type Nikon2PreviewSpaceRec struct {
+	offsetField *Field
+	lengthField *Field
+	imageData []ImageData // May be used for preview image.
+}
+
+func (rec *Nikon2PreviewSpaceRec) GetSpace() TagSpace {
+	return Nikon2PreviewSpace
+}
+
+func (*Nikon2PreviewSpaceRec) IsMakerNote() bool {
+	return false
+}
+
+func (*Nikon2PreviewSpaceRec) nodeSize(node IFDNode) uint32 {
+	return node.genericSize()
+}
+
+// Store preview image in the space rec.
+func (rec *Nikon2PreviewSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) error {
+	imageData, err := newImageData(buf, order, offsetField, sizeField)
+	if err != nil {
+		return err
+	}
+	rec.imageData = append(rec.imageData, *imageData)
+	return nil
+}
+
+func (rec *Nikon2PreviewSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+	// IFD fields aren't usually present in this IFD.
+	if field.Type == IFD {
+		return recurseSubIFDs(buf, order, ifdPositions, field, NewSpaceRec(Nikon2PreviewSpace))
+	}
+	if field.Tag == nikon2PreviewImageStart {
+		rec.offsetField = field
+	} else if field.Tag == nikon2PreviewImageLength {
+		rec.lengthField = field
+	}
+	if rec.offsetField != nil && rec.lengthField != nil {
+		rec.appendImageData(buf, order, rec.offsetField, rec.lengthField)
+		rec.offsetField = nil
+		rec.lengthField = nil
+	}
+	return nil, nil
+}
+
+func (*Nikon2PreviewSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
+}
+
+func (*Nikon2PreviewSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	return node.genericPutIFDTree(buf, pos)
+}
+
+func (rec *Nikon2PreviewSpaceRec) GetImageData() []ImageData {
+	return rec.imageData
+}
+	
 // Fields in Olympus1 IFD.
 const olympus1EquipmentIFD = 0x2010
 const olympus1CameraSettingsIFD = 0x2020
@@ -1577,6 +1665,10 @@ func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (u
 	}
 }
 
+func (*Olympus1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 // SpaceRec for Panasonic1 maker notes.
 type Panasonic1SpaceRec struct {
 }
@@ -1610,6 +1702,10 @@ func (*Panasonic1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uin
 	return node.genericPutIFDTree(buf, pos)
 }
 
+func (*Panasonic1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+	
 // Put image data from node, if any, into buf at pos. Return next data
 // position in buf and a mapping from the offset field tag to an
 // encoded array of offsets where image data was placed.
