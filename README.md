@@ -20,7 +20,7 @@ TIFF is a difficult file format, and there may be omissions in this library that
 
 Exif blocks are in TIFF format, but may contain proprietary maker notes. Currently, Canon, Nikon, Olympus and Panasonic maker notes can be encoded and decoded. In some cases, unsupported maker notes will be broken if the Exif block is rewritten, since they contain pointers that would need adjustment.
 
-Canon maker notes may contain a PreviewImageInfo field, which refers to the position and length of a preview image. Since the image is located outside the JPEG block that contains the maker note, special processing would be needed to preserve it when rewriting a file.
+Canon maker notes (possibly from the EOS 300D only) may contain a PreviewImageInfo field, which refers to the position and length of a preview image. Since the image is located outside the JPEG block that contains the maker note, special processing would be needed to preserve it when rewriting a file.
 
 No provision is made for modification of data in multiple threads. Mutexes etc., should be used as required.
 
