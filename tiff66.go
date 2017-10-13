@@ -953,6 +953,7 @@ const (
 	MPFIndexSpace                TagSpace = 5 // Multi-Picture Format.
 	MPFAttributeSpace            TagSpace = 6
 	Canon1Space                  TagSpace = 7
+	Fujifilm1Space               TagSpace = 20 // last
 	Nikon1Space                  TagSpace = 8
 	Nikon2Space                  TagSpace = 9
 	Nikon2PreviewSpace           TagSpace = 10
@@ -984,6 +985,8 @@ func (space TagSpace) Name() string {
 		return "MPFAttribute"
 	case Canon1Space:
 		return "Canon1"
+	case Fujifilm1Space:
+		return "Fujifilm1"
 	case Nikon1Space:
 		return "Nikon1"
 	case Nikon2Space:
@@ -1044,6 +1047,8 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 		return &ExifSpaceRec{}
 	case Canon1Space:
 		return &Canon1SpaceRec{}
+	case Fujifilm1Space:
+		return &Fujifilm1SpaceRec{}
 	case Nikon1Space:
 		return &Nikon1SpaceRec{}
 	case Nikon2Space:
@@ -1270,6 +1275,8 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 	var space TagSpace
 	lcMake := strings.ToLower(make)
 	switch {
+	case bytes.HasPrefix(buf[pos:], fujifilm1Label):
+		space = Fujifilm1Space
 	case bytes.HasPrefix(buf[pos:], nikon1Label):
 		space = Nikon1Space
 	case bytes.HasPrefix(buf[pos:], nikon2LabelPrefix):
@@ -1359,6 +1366,58 @@ func (*Canon1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32,
 }
 
 func (*Canon1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+
+// SpaceRec for Fujifilm1 maker notes.
+type Fujifilm1SpaceRec struct {
+	label []byte
+}
+
+func (*Fujifilm1SpaceRec) GetSpace() TagSpace {
+	return Fujifilm1Space
+}
+
+func (*Fujifilm1SpaceRec) IsMakerNote() bool {
+	return true
+}
+
+var fujifilm1Label = []byte("FUJIFILM")
+
+func (rec *Fujifilm1SpaceRec) nodeSize(node IFDNode) uint32 {
+	// Label, IFD position, and IFD.
+	return uint32(len(rec.label)) + 4 + node.genericSize()
+}
+
+func (*Fujifilm1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+	return nil, nil
+}
+
+func (rec *Fujifilm1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// Offsets are relative to start of the makernote.
+	tiff := buf[pos:]
+	lablen := uint32(len(fujifilm1Label))
+	rec.label = append([]byte{}, tiff[ : lablen]...)
+	// Only the 2nd half of the TIFF header is present, the position
+	// of the IFD.
+	pos = node.Order.Uint32(tiff[lablen:])
+	return node.genericGetIFDTreeIter(tiff, pos, ifdPositions)
+}
+
+func (rec *Fujifilm1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	tiff := buf[pos:]
+	copy(tiff, rec.label)
+	lablen := uint32(len(rec.label))
+	start := lablen + 4
+	node.Order.PutUint32(tiff[lablen:], start)
+	next, err := node.genericPutIFDTree(tiff, start)
+	if err != nil {
+		return 0, err
+	}
+	return pos + next, nil
+}
+
+func (*Fujifilm1SpaceRec) GetImageData() []ImageData {
 	return nil
 }
 
@@ -1453,8 +1512,9 @@ func (rec *Nikon2SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifd
 	// header.  If the label is present, the maker note contains a
 	// new TIFF block and uses relative offsets within the block.
 	if bytes.HasPrefix(buf[pos:], nikon2LabelPrefix) {
-		rec.label = buf[pos : int(pos)+len(nikon2LabelPrefix)+4]
-		tiff := buf[pos+uint32(len(rec.label)):]
+		lablen := uint32(len(nikon2LabelPrefix)+4)
+		rec.label = append([]byte{}, buf[pos : pos+lablen]...)
+		tiff := buf[pos+lablen:]
 		valid, order, pos := GetHeader(tiff)
 		if !valid {
 			return errors.New("TIFF header not found in Nikon2 maker note")
@@ -1634,12 +1694,12 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 
 func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	if bytes.HasPrefix(buf[pos:], olympus1ALabelPrefix) {
-		rec.label = buf[pos : pos+olympus1ALabelLen]
+		rec.label = append([]byte{}, buf[pos : pos+olympus1ALabelLen]...)
 		// Offsets are relative to start of buf.
 		return node.genericGetIFDTreeIter(buf, pos+olympus1ALabelLen, ifdPositions)
 	} else if bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix) {
 		// Offsets are relative to start of maker note.
-		rec.label = buf[pos : pos+olympus1BLabelLen]
+		rec.label = append([]byte{}, buf[pos : pos+olympus1BLabelLen]...)
 		tiff := buf[pos:]
 		node.Order = binary.LittleEndian
 		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
