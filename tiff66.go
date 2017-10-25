@@ -1277,6 +1277,8 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 	switch {
 	case bytes.HasPrefix(buf[pos:], fujifilm1Label):
 		space = Fujifilm1Space
+	case bytes.HasPrefix(buf[pos:], generaleLabel):
+		space = Fujifilm1Space
 	case bytes.HasPrefix(buf[pos:], nikon1Label):
 		space = Nikon1Space
 	case bytes.HasPrefix(buf[pos:], nikon2LabelPrefix):
@@ -1384,6 +1386,9 @@ func (*Fujifilm1SpaceRec) IsMakerNote() bool {
 
 var fujifilm1Label = []byte("FUJIFILM")
 
+// GE E1255W has a Fujifilm maker note with a different label.
+var generaleLabel = []byte("GENERALE")
+
 func (rec *Fujifilm1SpaceRec) nodeSize(node IFDNode) uint32 {
 	// Label, IFD position, and IFD.
 	return uint32(len(rec.label)) + 4 + node.genericSize()
@@ -1396,8 +1401,19 @@ func (*Fujifilm1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPosit
 func (rec *Fujifilm1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	// Offsets are relative to start of the makernote.
 	tiff := buf[pos:]
-	lablen := uint32(len(fujifilm1Label))
-	rec.label = append([]byte{}, tiff[ : lablen]...)
+	var lablen int
+	if bytes.HasPrefix(tiff, fujifilm1Label) {
+		lablen = len(fujifilm1Label)
+	} else if bytes.HasPrefix(tiff, generaleLabel) {
+		lablen = len(generaleLabel)
+	} else {
+		// Can't reach this point with other values.
+		panic("Invalid Fujifilm label")
+	}
+	rec.label = append([]byte{}, tiff[:lablen]...)
+	// Must be read as little-endian, even if the Exif block is
+	// big endian (as in Leica digilux 4.3).
+	node.Order = binary.LittleEndian
 	// Only the 2nd half of the TIFF header is present, the position
 	// of the IFD.
 	pos = node.Order.Uint32(tiff[lablen:])
@@ -1512,8 +1528,8 @@ func (rec *Nikon2SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifd
 	// header.  If the label is present, the maker note contains a
 	// new TIFF block and uses relative offsets within the block.
 	if bytes.HasPrefix(buf[pos:], nikon2LabelPrefix) {
-		lablen := uint32(len(nikon2LabelPrefix)+4)
-		rec.label = append([]byte{}, buf[pos : pos+lablen]...)
+		lablen := uint32(len(nikon2LabelPrefix) + 4)
+		rec.label = append([]byte{}, buf[pos:pos+lablen]...)
 		tiff := buf[pos+lablen:]
 		valid, order, pos := GetHeader(tiff)
 		if !valid {
@@ -1694,12 +1710,12 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 
 func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	if bytes.HasPrefix(buf[pos:], olympus1ALabelPrefix) {
-		rec.label = append([]byte{}, buf[pos : pos+olympus1ALabelLen]...)
+		rec.label = append([]byte{}, buf[pos:pos+olympus1ALabelLen]...)
 		// Offsets are relative to start of buf.
 		return node.genericGetIFDTreeIter(buf, pos+olympus1ALabelLen, ifdPositions)
 	} else if bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix) {
 		// Offsets are relative to start of maker note.
-		rec.label = append([]byte{}, buf[pos : pos+olympus1BLabelLen]...)
+		rec.label = append([]byte{}, buf[pos:pos+olympus1BLabelLen]...)
 		tiff := buf[pos:]
 		node.Order = binary.LittleEndian
 		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
