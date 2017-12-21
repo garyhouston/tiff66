@@ -1484,7 +1484,7 @@ type Nikon2SpaceRec struct {
 	// compatible. Model examples:
 	// Coolpix 990: no header
 	// Coolpix 5000: "Nikon\0\2\0\0\0"
-	// ??? : "\0\2\x10\0\0"
+	// Nikon D5100: "Nikon\0\2\x10\0\0"
 	// Nikon D500: "Nikon\0\2\x11\0\0"
 	label []byte
 }
