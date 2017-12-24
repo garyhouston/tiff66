@@ -860,7 +860,7 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, spaceRec Spa
 	return &node, node.SpaceRec.getIFDTree(&node, buf, pos, ifdPositions)
 }
 
-// Version of getIFDTreeIter with no subspace-specific processing.
+// Version of getIFDTreeIter with no subspace-specific processing (untrue, maybe the function or the comment could be improved).
 func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions posMap) error {
 	if ifdPositions[posKey(buf, pos)] {
 		return errors.New("getIFDTreeIter: IFD cycle detected")
@@ -884,6 +884,7 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 	tableSize := node.TableSize()
 	if pos+tableSize < pos || pos+tableSize > bufsize {
 		node.Fields = nil
+		fmt.Println(node.GetSpace().Name())
 		return GetIFDError{ErrIFDTruncated, ifdpos, entries, 0}
 	}
 	pos += 2
