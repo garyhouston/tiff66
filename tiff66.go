@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/hashicorp/go-multierror"
 	"math"
 	"sort"
 	"strings"
@@ -654,35 +655,6 @@ func PutHeader(buf []byte, order binary.ByteOrder, ifdPos uint32) {
 	order.PutUint32(buf[4:], ifdPos)
 }
 
-const (
-	ErrIFDPos       = 1 // IFD position outside buffer.
-	ErrIFDTruncated = 2 // IFD doesn't fit in buffer.
-	ErrFieldData    = 3 // Field data pointer outside buffer.
-	ErrImageData    = 4 // ImageData pointer outside buffer.
-)
-
-type GetIFDError struct {
-	ErrType    int
-	IFDPos     uint32
-	IFDEntries uint16
-	FieldTag   Tag
-}
-
-func (err GetIFDError) Error() string {
-	switch err.ErrType {
-	case ErrIFDPos:
-		return fmt.Sprintf("Attempted to read IFD at position %d, past end of input", err.IFDPos)
-	case ErrIFDTruncated:
-		return fmt.Sprintf("IFD at offset %d with %d fields extends past end of input", err.IFDPos, err.IFDEntries)
-	case ErrFieldData:
-		return fmt.Sprintf("When reading IFD at offset %d, data for tag %d extends past end of input", err.IFDPos, err.FieldTag)
-	case ErrImageData:
-		return fmt.Sprintf("When reading IFD at offset %d, image data for tag %d extends past end of input", err.IFDPos, err.FieldTag)
-	default:
-		return "Invalid error"
-	}
-}
-
 // Node in an IFD tree.
 type IFDNode struct {
 	// Usually all IFDs in a TIFF file have the same byte order,
@@ -706,11 +678,21 @@ func NewIFDNode(space TagSpace) *IFDNode {
 	return &IFDNode{SpaceRec: NewSpaceRec(space)}
 }
 
+const tableOverhead = 6 // 2 bytes for the entry count and 4 for the position of the next IFD.
+const tableEntrySize = 12
+
 // Return the serialized size of a basic IFD table.
+func tableSize(numFields uint16) uint32 {
+	return tableOverhead + uint32(numFields*tableEntrySize)
+}
+
 func (node IFDNode) TableSize() uint32 {
-	// 2 bytes for the entry count, 12 for each entry, and 4 for the
-	// position of the next IFD.
-	return 2 + uint32(len(node.Fields))*12 + 4
+	return tableSize(uint16(len(node.Fields)))
+}
+
+// Return the number of IFD table entries that would fit in size bytes.
+func maxTableEntries(size uint32) uint32 {
+	return (size - tableOverhead) / tableEntrySize
 }
 
 // Serialized size of a node, including its IFD, external data, image
@@ -831,7 +813,9 @@ func (node *IFDNode) DeleteFields(tags []Tag) {
 // Create an IFDNode tree by reading an IFD and all the other IFDs to
 // which it refers. 'pos' is the position of the root IFD in the byte
 // slice. 'space' is the namespace to assign to the root, usually
-// TIFFSpace.
+// TIFFSpace. It will try to read as much data as possible, even if there
+// are errors. If no useful data can be obtained, the returned node will
+// have Fields with len 0, possibly nil. The error may be a multierror structure.
 func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) (*IFDNode, error) {
 	ifdPositions := make(posMap)
 	return getIFDTreeIter(buf, order, pos, NewSpaceRec(space), ifdPositions)
@@ -860,65 +844,72 @@ func getIFDTreeIter(buf []byte, order binary.ByteOrder, pos uint32, spaceRec Spa
 	return &node, node.SpaceRec.getIFDTree(&node, buf, pos, ifdPositions)
 }
 
-// Version of getIFDTreeIter with no subspace-specific processing (untrue, maybe the function or the comment could be improved).
+// Version of getIFDTreeIter without subspace-specific header processing. Try to read fields and process sub-IFDs.
 func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions posMap) error {
+	space := node.GetSpace()
+	// ifdpos is the byte position in the file, except in certain maker notes.
+	ifdpos := pos
 	if ifdPositions[posKey(buf, pos)] {
-		return errors.New("getIFDTreeIter: IFD cycle detected")
+		return fmt.Errorf("IFD cycle detected in %s IFD at %d", space.Name(), ifdpos)
 	}
 	ifdPositions[posKey(buf, pos)] = true
 	node.SubIFDs = make([]SubIFD, 0, 10)
-	ifdpos := pos
 	bufsize := uint32(len(buf))
 	if pos+2 < pos || pos+2 > bufsize {
-		return GetIFDError{ErrIFDPos, ifdpos, 0, 0}
+		return fmt.Errorf("Could not read %s IFD at %d: past end of input", space.Name(), ifdpos)
 	}
 	order := node.Order
+	// Whether to process the pointer at the end of the IFD that points to the next one.
+	// Panasonic maker notes omit the pointer.
+	processNext := space != Panasonic1Space
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
+	var err error
 	if entries == 0 {
-		// May be technically invalid, but just leave an IFD with
-		// no entries.
-		return nil
+		// Technically an error since the TIFF spec doesn't permit IFDs with no entries. There may still be
+		// a Next pointer.
+		err = multierror.Append(err, fmt.Errorf("%s IFD at %d doesn't contain any fields", space.Name(), ifdpos))
 	}
-	fields := make([]Field, entries)
-	node.Fields = fields
-	tableSize := node.TableSize()
+	tableSize := tableSize(entries)
+	fields := make([]Field, 0, entries)
 	if pos+tableSize < pos || pos+tableSize > bufsize {
-		node.Fields = nil
-		fmt.Println(node.GetSpace().Name())
-		return GetIFDError{ErrIFDTruncated, ifdpos, entries, 0}
+		max := maxTableEntries(bufsize - pos)
+		processNext = false
+		err = multierror.Append(err, fmt.Errorf("%s IFD at %d extends past end of input: processing %d out of %d fields", space.Name(), ifdpos, max, entries))
+		entries = uint16(max)
 	}
 	pos += 2
 	for i := uint16(0); i < entries; i++ {
-		fields[i].Tag = Tag(order.Uint16(buf[pos:]))
+		var field Field
+		field.Tag = Tag(order.Uint16(buf[pos:]))
 		pos += 2
-		fields[i].Type = Type(order.Uint16(buf[pos:]))
+		field.Type = Type(order.Uint16(buf[pos:]))
 		pos += 2
-		fields[i].Count = order.Uint32(buf[pos:])
+		field.Count = order.Uint32(buf[pos:])
 		pos += 4
-		size := fields[i].Size()
+		size := field.Size()
 		dataPos := pos
+		pos += 4
 		if size > 4 {
-			dataPos = order.Uint32(buf[pos:])
+			dataPos = order.Uint32(buf[dataPos:])
 			if dataPos+size < dataPos || dataPos+size > bufsize {
-				return GetIFDError{ErrFieldData, ifdpos, entries, fields[i].Tag}
+				err = multierror.Append(err, fmt.Errorf("Skipping field %d with tag %d in %s IFD at %d: data past end of input", i, field.Tag, space.Name(), ifdpos))
+				continue
 			}
 		}
-		fields[i].Data = buf[dataPos : dataPos+size]
-		pos += 4
-		// Space-specific field processing, including subIFD
-		// recursion.
-		subIFDs, err := node.SpaceRec.takeField(buf, order, ifdPositions, i, &fields[i], dataPos)
-		if err != nil {
-			return err
+		field.Data = buf[dataPos : dataPos+size]
+		// Space-specific field processing, including subIFD recursion.
+		subIFDs, fieldErr := node.SpaceRec.takeField(buf, order, ifdPositions, i, field, dataPos)
+		if fieldErr != nil {
+			err = multierror.Append(err, fieldErr)
 		}
 		if subIFDs != nil {
 			node.SubIFDs = append(node.SubIFDs, subIFDs...)
 		}
+		fields = append(fields, field)
 	}
+	node.Fields = fields
 	next := uint32(0)
-	space := node.GetSpace()
-	if space != Panasonic1Space {
-		// Panasonic maker note omits the pointer.
+	if processNext {
 		next = order.Uint32(buf[pos:])
 	}
 	if next > 0 {
@@ -933,13 +924,13 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 			// Assume the next IFD is the same type.
 			nextSpace = space
 		}
-		var err error
-		node.Next, err = getIFDTreeIter(buf, order, next, NewSpaceRec(nextSpace), ifdPositions)
-		if err != nil {
-			return err
+		var nextErr error
+		node.Next, nextErr = getIFDTreeIter(buf, order, next, NewSpaceRec(nextSpace), ifdPositions)
+		if nextErr != nil {
+			err = multierror.Append(err, nextErr)
 		}
 	}
-	return nil
+	return err
 }
 
 // IFD Tag namespace.
@@ -1030,7 +1021,7 @@ type SpaceRec interface {
 	GetSpace() TagSpace
 	IsMakerNote() bool
 	nodeSize(IFDNode) uint32
-	takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error)
+	takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error)
 	getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error
 	putIFDTree(IFDNode, []byte, uint32) (uint32, error)
 	// Return ImageData, which can be the arrays of scan data that may be
@@ -1067,19 +1058,20 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 
 // Recursively read SubIFDs specified with a given field. Such fields
 // contain pointer(s) to the SubIFD location(s).
-func recurseSubIFDs(buf []byte, order binary.ByteOrder, ifdPositions posMap, field *Field, spaceRec SpaceRec) ([]SubIFD, error) {
+func recurseSubIFDs(buf []byte, order binary.ByteOrder, ifdPositions posMap, field Field, spaceRec SpaceRec) ([]SubIFD, error) {
 	var subIFDs []SubIFD
+	var err error
 	for i := uint32(0); i < field.Count; i++ {
 		var sub SubIFD
 		sub.Tag = field.Tag
-		var err error
-		sub.Node, err = getIFDTreeIter(buf, order, field.Long(i, order), spaceRec, ifdPositions)
-		if err != nil {
-			return nil, err
+		var suberr error
+		sub.Node, suberr = getIFDTreeIter(buf, order, field.Long(i, order), spaceRec, ifdPositions)
+		if suberr != nil {
+			err = multierror.Append(err, suberr)
 		}
 		subIFDs = append(subIFDs, sub)
 	}
-	return subIFDs, nil
+	return subIFDs, err
 }
 
 // SpaceRec with no special processing.
@@ -1099,7 +1091,7 @@ func (*GenericSpaceRec) nodeSize(node IFDNode) uint32 {
 	return node.genericSize()
 }
 
-func (rec *GenericSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (rec *GenericSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// Process a field of type IFD: these declare a subIFD, and
 	// can be potentially found in any IFD.  Assume the subIFD has
 	// the same space as the current IFD.
@@ -1128,8 +1120,8 @@ const tiffNumTags = 4
 
 // SpaceRec for TIFF nodes.
 type TIFFSpaceRec struct {
-	offsetFields [tiffNumTags]*Field
-	sizeFields   [tiffNumTags]*Field
+	offsetFields [tiffNumTags]Field
+	sizeFields   [tiffNumTags]Field
 	make, model  string
 	imageData    []ImageData
 }
@@ -1146,14 +1138,14 @@ func (*TIFFSpaceRec) nodeSize(node IFDNode) uint32 {
 	return node.genericSize()
 }
 
-func newImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) (*ImageData, error) {
+func newImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField Field) (*ImageData, error) {
 	segments := make([]ImageSegment, offsetField.Count)
 	for i := uint32(0); i < offsetField.Count; i++ {
 		offset := uint32(offsetField.AnyInteger(i, order))
 		size := uint32(sizeField.AnyInteger(i, order))
 		bufsize := uint32(len(buf))
 		if offset+size < offset || offset+size > bufsize {
-			return nil, &GetIFDError{4, 0, 0, offsetField.Tag}
+			return nil, fmt.Errorf("Image data for tags %d / %d extends past end of input", offsetField.Tag, sizeField.Tag)
 		}
 		segments[i] = buf[offset : offset+size]
 	}
@@ -1161,7 +1153,7 @@ func newImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Fi
 }
 
 // Store image data in the TIFF space rec.
-func (rec *TIFFSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) error {
+func (rec *TIFFSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField Field) error {
 	imageData, err := newImageData(buf, order, offsetField, sizeField)
 	if err != nil {
 		return err
@@ -1170,7 +1162,7 @@ func (rec *TIFFSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, off
 	return nil
 }
 
-func (rec *TIFFSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (rec *TIFFSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// SubIFDs.
 	if field.Type == IFD || field.Tag == SubIFDs || field.Tag == ExifIFD || field.Tag == GPSIFD {
 		var spaceRec SpaceRec
@@ -1191,10 +1183,10 @@ func (rec *TIFFSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 		} else if field.Tag == tiffSizeTags[i] {
 			rec.sizeFields[i] = field
 		}
-		if rec.offsetFields[i] != nil && rec.sizeFields[i] != nil {
+		if rec.offsetFields[i].Tag != 0 && rec.sizeFields[i].Tag != 0 {
 			rec.appendImageData(buf, order, rec.offsetFields[i], rec.sizeFields[i])
-			rec.offsetFields[i] = nil
-			rec.sizeFields[i] = nil
+			rec.offsetFields[i].Tag = 0
+			rec.sizeFields[i].Tag = 0
 		}
 	}
 	switch field.Tag {
@@ -1213,7 +1205,7 @@ func (rec *TIFFSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			size := uint32(64)
 			bufsize := uint32(len(buf))
 			if offset+size < offset || offset+size > bufsize {
-				return nil, &GetIFDError{4, 0, 0, field.Tag}
+				return nil, fmt.Errorf("Image data for tag %d extends past end of input", field.Tag)
 			}
 			segments[i] = buf[offset : offset+size]
 		}
@@ -1224,7 +1216,7 @@ func (rec *TIFFSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			offset := field.Long(i, order)
 			bufsize := uint32(len(buf))
 			if offset+16 < offset || offset+16 > bufsize {
-				return nil, &GetIFDError{4, 0, 0, field.Tag}
+				return nil, fmt.Errorf("Image data for tag %d extends past end of input", field.Tag)
 			}
 			numvals := uint32(0)
 			for j := uint32(0); j < 16; j++ {
@@ -1302,7 +1294,7 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 	return space
 }
 
-func (rec *ExifSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (rec *ExifSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// SubIFDs.
 	if field.Type == IFD || field.Tag == interOpIFD {
 		subspace := ExifSpace
@@ -1319,10 +1311,7 @@ func (rec *ExifSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			var err error
 			sub.Tag = field.Tag
 			sub.Node, err = getIFDTreeIter(buf, order, dataPos, NewSpaceRec(space), ifdPositions)
-			if err != nil {
-				return nil, err
-			}
-			return []SubIFD{sub}, nil
+			return []SubIFD{sub}, err
 		}
 	}
 	return nil, nil
@@ -1356,7 +1345,7 @@ func (*Canon1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return node.genericSize()
 }
 
-func (*Canon1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Canon1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	return nil, nil
 }
 
@@ -1395,7 +1384,7 @@ func (rec *Fujifilm1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(len(rec.label)) + 4 + node.genericSize()
 }
 
-func (*Fujifilm1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Fujifilm1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	return nil, nil
 }
 
@@ -1408,8 +1397,8 @@ func (rec *Fujifilm1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, 
 	} else if bytes.HasPrefix(tiff, generaleLabel) {
 		lablen = len(generaleLabel)
 	} else {
-		// Can't reach this point with other values.
-		panic("Invalid Fujifilm label")
+		// Shouldn't reach this point if we already know it's a Fujifilm1SpaceRec.
+		return errors.New("Invalid label for Fujifilm1 maker note")
 	}
 	rec.label = append([]byte{}, tiff[:lablen]...)
 	// Must be read as little-endian, even if the Exif block is
@@ -1456,7 +1445,7 @@ func (*Nikon1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(len(nikon1Label)) + node.genericSize()
 }
 
-func (*Nikon1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Nikon1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	return nil, nil
 }
 
@@ -1509,7 +1498,7 @@ func (rec *Nikon2SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(labelLen) + HeaderSize + node.genericSize()
 }
 
-func (*Nikon2SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Nikon2SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// SubIFDs.
 	if field.Type == IFD || field.Tag == nikon2PreviewIFD || field.Tag == nikon2NikonScanIFD {
 		subspace := Nikon2Space
@@ -1576,8 +1565,8 @@ const nikon2PreviewImageLength = 0x202
 
 // SpaceRec for Nikon2 Preview IFDs.
 type Nikon2PreviewSpaceRec struct {
-	offsetField *Field
-	lengthField *Field
+	offsetField Field
+	lengthField Field
 	imageData   []ImageData // May be used for preview image.
 }
 
@@ -1594,7 +1583,7 @@ func (*Nikon2PreviewSpaceRec) nodeSize(node IFDNode) uint32 {
 }
 
 // Store preview image in the space rec.
-func (rec *Nikon2PreviewSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField *Field) error {
+func (rec *Nikon2PreviewSpaceRec) appendImageData(buf []byte, order binary.ByteOrder, offsetField, sizeField Field) error {
 	imageData, err := newImageData(buf, order, offsetField, sizeField)
 	if err != nil {
 		return err
@@ -1603,7 +1592,7 @@ func (rec *Nikon2PreviewSpaceRec) appendImageData(buf []byte, order binary.ByteO
 	return nil
 }
 
-func (rec *Nikon2PreviewSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (rec *Nikon2PreviewSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// IFD fields aren't usually present in this IFD.
 	if field.Type == IFD {
 		return recurseSubIFDs(buf, order, ifdPositions, field, NewSpaceRec(Nikon2PreviewSpace))
@@ -1613,10 +1602,10 @@ func (rec *Nikon2PreviewSpaceRec) takeField(buf []byte, order binary.ByteOrder, 
 	} else if field.Tag == nikon2PreviewImageLength {
 		rec.lengthField = field
 	}
-	if rec.offsetField != nil && rec.lengthField != nil {
+	if rec.offsetField.Tag != 0 && rec.lengthField.Tag != 0 {
 		rec.appendImageData(buf, order, rec.offsetField, rec.lengthField)
-		rec.offsetField = nil
-		rec.lengthField = nil
+		rec.offsetField.Tag = 0
+		rec.lengthField.Tag = 0
 	}
 	return nil, nil
 }
@@ -1670,7 +1659,7 @@ func (rec *Olympus1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(labelLen) + node.genericSize()
 }
 
-func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// SubIFDs.
 	if field.Type == IFD || field.Tag == olympus1EquipmentIFD || field.Tag == olympus1CameraSettingsIFD || field.Tag == olympus1RawDevelopmentIFD || field.Tag == olympus1RawDev2IFD || field.Tag == olympus1ImageProcessingIFD || field.Tag == olympus1FocusInfoIFD {
 		subspace := Olympus1Space
@@ -1688,7 +1677,6 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 		case olympus1FocusInfoIFD:
 			subspace = Olympus1FocusInfoSpace
 		}
-		var subIFDs []SubIFD
 		var sub SubIFD
 		sub.Tag = field.Tag
 		var err error
@@ -1700,11 +1688,7 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			return recurseSubIFDs(buf, order, ifdPositions, field, NewSpaceRec(subspace))
 		}
 		sub.Node, err = getIFDTreeIter(buf, order, dataPos, NewSpaceRec(subspace), ifdPositions)
-		if err != nil {
-			return nil, err
-		}
-		subIFDs = append(subIFDs, sub)
-		return subIFDs, nil
+		return []SubIFD{sub}, err
 	}
 	return nil, nil
 }
@@ -1721,6 +1705,7 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 		node.Order = binary.LittleEndian
 		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
 	} else {
+		// Shouldn't reach this point if we already know it's an Olympus1SpaceRec.
 		return errors.New("Invalid label for Olympus1 maker note")
 	}
 }
@@ -1765,7 +1750,7 @@ func (*Panasonic1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(len(panasonic1Label)) + node.genericSize()
 }
 
-func (*Panasonic1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field *Field, dataPos uint32) ([]SubIFD, error) {
+func (*Panasonic1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	return nil, nil
 }
 
@@ -1866,7 +1851,7 @@ func (node IFDNode) put(buf []byte, pos uint32, subifds []IFDpos, nextptr uint32
 	var subifdPtrs = make([]*IFDpos, 0, len(subifds))
 	for _, field := range node.Fields {
 		if field.Tag < lastTag {
-			return 0, errors.New(fmt.Sprintf("IFDNode.Put: tags are out of order, %d(0x%X) is followed by %d(0x%X)", lastTag, lastTag, field.Tag, field.Tag))
+			return 0, fmt.Errorf("IFDNode.Put: tags are out of order, %d(0x%X) is followed by %d(0x%X)", lastTag, lastTag, field.Tag, field.Tag)
 		}
 		lastTag = field.Tag
 		order.PutUint16(buf[pos:], uint16(field.Tag))
