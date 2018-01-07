@@ -815,7 +815,8 @@ func (node *IFDNode) DeleteFields(tags []Tag) {
 // slice. 'space' is the namespace to assign to the root, usually
 // TIFFSpace. It will try to read as much data as possible, even if there
 // are errors. If no useful data can be obtained, the returned node will
-// have Fields with len 0, possibly nil. The error may be a multierror structure.
+// have Fields with len 0, possibly nil, and possibly with a pointer to
+// the next IFD. The error may be a multierror structure.
 func GetIFDTree(buf []byte, order binary.ByteOrder, pos uint32, space TagSpace) (*IFDNode, error) {
 	ifdPositions := make(posMap)
 	return getIFDTreeIter(buf, order, pos, NewSpaceRec(space), ifdPositions)
@@ -870,14 +871,25 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		err = multierror.Append(err, fmt.Errorf("%s IFD at %d doesn't contain any fields", space.Name(), ifdpos))
 	}
 	tableSize := tableSize(entries)
-	fields := make([]Field, 0, entries)
 	if pos+tableSize < pos || pos+tableSize > bufsize {
-		max := maxTableEntries(bufsize - pos)
 		processNext = false
-		err = multierror.Append(err, fmt.Errorf("%s IFD at %d extends past end of input: processing %d out of %d fields", space.Name(), ifdpos, max, entries))
-		entries = uint16(max)
+		// The table extends past the end of the buffer:
+		// examine the table for possibly valid fields - tags
+		// should be increasing in value.
+		max := uint16(maxTableEntries(bufsize - pos))
+		for i, last := uint16(0), Tag(0); i < max; i++ {
+			tagpos := pos + 2 + uint32(i * tableEntrySize)
+			tag := Tag(order.Uint16(buf[tagpos:]))
+			if tag < last {
+				entries = i
+				break
+			}
+			last = tag
+		}
+		err = multierror.Append(err, fmt.Errorf("%s IFD at %d extends past end of input, attempting to read %d entries", space.Name(), ifdpos, entries))
 	}
 	pos += 2
+	fields := make([]Field, 0, entries)
 	for i := uint16(0); i < entries; i++ {
 		var field Field
 		field.Tag = Tag(order.Uint16(buf[pos:]))
