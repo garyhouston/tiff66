@@ -24,7 +24,7 @@ Canon maker notes (possibly from the EOS 300D only) may contain a PreviewImageIn
 
 No provision is made for modification of data in multiple threads. Mutexes etc., should be used as required.
 
-When reading files, GetIFDTree will attempt to decode as much data as possible, even if errors occur. If multiple errors are encountered, they will be encoded in a [multierror](github.com/hashicorp/go-multierror) structure.
+When reading files, GetIFDTree will attempt to decode as much data as possible, even if errors occur. If multiple errors are encountered, they will be encoded in a [multierror](https://github.com/hashicorp/go-multierror) structure.
 
 Information about maker note formats was obtained from [Exiftool](https://www.sno.phy.queensu.ca/~phil/exiftool/).
 
