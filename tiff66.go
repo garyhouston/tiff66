@@ -876,8 +876,8 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		// The table extends past the end of the buffer:
 		// examine the table for possibly valid fields - tags
 		// should be increasing in value.
-		max := uint16(maxTableEntries(bufsize - pos))
-		for i, last := uint16(0), Tag(0); i < max; i++ {
+		entries = uint16(maxTableEntries(bufsize - pos))
+		for i, last := uint16(0), Tag(0); i < entries; i++ {
 			tagpos := pos + 2 + uint32(i*tableEntrySize)
 			tag := Tag(order.Uint16(buf[tagpos:]))
 			if tag < last {
