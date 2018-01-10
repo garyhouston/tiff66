@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	tiff "github.com/garyhouston/tiff66"
 	"io/ioutil"
 	"log"
@@ -10,21 +9,22 @@ import (
 
 // Decode a TIFF file, then re-encode it and write to a new file.
 func main() {
+	logger := log.New(os.Stderr, "", 0)
 	if len(os.Args) != 3 {
-		fmt.Printf("Usage: %s file outfile\n", os.Args[0])
-		return
+		logger.Fatalf("Usage: %s file outfile\n", os.Args[0])
 	}
 	buf, err := ioutil.ReadFile(os.Args[1])
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	valid, order, ifdPos := tiff.GetHeader(buf)
 	if !valid {
-		log.Fatal("Not a valid TIFF file")
+		logger.Fatal("Not a valid TIFF file")
 	}
 	root, err := tiff.GetIFDTree(buf, order, ifdPos, tiff.TIFFSpace)
 	if err != nil {
-		log.Fatal(err)
+		logger.Print(err)
+		logger.Print("Error(s) occurred during decoding, but will repack anyway.")
 	}
 	root.Fix()
 	fileSize := tiff.HeaderSize + root.TreeSize()
@@ -32,8 +32,10 @@ func main() {
 	tiff.PutHeader(out, order, tiff.HeaderSize)
 	next, err := root.PutIFDTree(out, tiff.HeaderSize)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	out = out[:next]
-	ioutil.WriteFile(os.Args[2], out, 0644)
+	if err = ioutil.WriteFile(os.Args[2], out, 0644); err != nil {
+		logger.Fatal(err)
+	}
 }
