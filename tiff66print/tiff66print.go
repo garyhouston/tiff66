@@ -14,7 +14,7 @@ func printNode(node *tiff.IFDNode, length uint32) {
 	fields := node.Fields
 	space := node.GetSpace()
 	fmt.Printf("%s IFD with %d ", space.Name(), len(fields))
-	if len(fields) > 1 {
+	if len(fields) != 1 {
 		fmt.Println("entries:")
 	} else {
 		fmt.Println("entry:")
@@ -52,23 +52,23 @@ func printNode(node *tiff.IFDNode, length uint32) {
 // detected.
 func main() {
 	var length uint
+	logger := log.New(os.Stderr, "", 0)
 	flag.UintVar(&length, "m", 20, "maximum values to print or 0 for no limit")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Printf("Usage: %s [-m max values] file\n", os.Args[0])
-		return
+		logger.Fatalf("Usage: %s [-m max values] file\n", os.Args[0])
 	}
 	buf, err := ioutil.ReadFile(flag.Arg(0))
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	valid, order, ifdPos := tiff.GetHeader(buf)
 	if !valid {
-		log.Fatal("Not a valid TIFF file")
+		logger.Fatal("Not a valid TIFF file")
 	}
 	root, err := tiff.GetIFDTree(buf, order, ifdPos, tiff.TIFFSpace)
-	if err != nil {
-		log.Fatal(err)
-	}
 	printNode(root, uint32(length))
+	if err != nil {
+		logger.Print(err)
+	}
 }
