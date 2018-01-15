@@ -1883,10 +1883,10 @@ func (node IFDNode) put(buf []byte, pos uint32, subifds []IFDpos, nextptr uint32
 		}
 		if len(subifdPtrs) > 0 && field.Type.Size() == 1 {
 			if len(subifdPtrs) > 1 {
-				errors.New("IFDNode.Put: IFD array field expected to have a single IFD.")
+				return 0, errors.New("IFDNode.Put: IFD array field expected to have a single IFD.")
 			}
 			if subifdPtrs[0].Size < 5 {
-				errors.New("IFDNode.Put: sub-IFD expected to have size > 4")
+				return 0, errors.New("IFDNode.Put: sub-IFD expected to have size > 4")
 			}
 			order.PutUint32(buf[pos:], subifdPtrs[0].Size)
 			pos += 4
