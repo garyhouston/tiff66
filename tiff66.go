@@ -1903,6 +1903,9 @@ func (node IFDNode) put(buf []byte, pos uint32, subifds []IFDpos, nextptr uint32
 			if field.Type.Size() != 4 {
 				return 0, errors.New("IFDNode.Put: sub-IFD pointer expected to have field type with size 4")
 			}
+			if len(subifdPtrs) != int(field.Count) {
+				return 0, fmt.Errorf("IFDNode.Put: field (%d) count (%d) doesn't match number of sub-IFDs (%d)", field.Tag, field.Count, len(subifdPtrs))
+			}
 			data = make([]byte, size)
 			for i := range subifdPtrs {
 				order.PutUint32(data[i*4:], subifdPtrs[i].Pos)
