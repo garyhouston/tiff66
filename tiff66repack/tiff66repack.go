@@ -27,6 +27,10 @@ func main() {
 		logger.Print("Error(s) occurred during decoding, but will repack anyway.")
 	}
 	root.Fix()
+	root = root.DeleteEmptyIFDs()
+	if root == nil {
+		logger.Fatal("Output TIFF file would have no fields; invalid according to TIFF spec.")
+	}
 	fileSize := tiff.HeaderSize + root.TreeSize()
 	out := make([]byte, fileSize)
 	tiff.PutHeader(out, order, tiff.HeaderSize)
