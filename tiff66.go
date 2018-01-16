@@ -2025,3 +2025,47 @@ func (node *IFDNode) Fix() {
 		node.Next.Fix()
 	}
 }
+
+// Delete the nth SubIFD from a node, also removing its reference in the fields.
+func (node *IFDNode) DeleteSubIFD(n int) {
+	for i := range node.Fields {
+		if node.Fields[i].Tag == node.SubIFDs[n].Tag {
+			if node.Fields[i].Type.Size() == 1 {
+				// Fields of byte type where the Count is the packed size of a single subIFD.
+				node.DeleteFields([]Tag{node.Fields[i].Tag})
+			} else {
+				// Fields of integer type where the Count is the number of subIFDs.
+				node.Fields[i].Count--
+				if node.Fields[i].Count == 0 {
+					node.DeleteFields([]Tag{node.Fields[i].Tag})
+				}
+			}
+			break
+		}
+	}
+	node.SubIFDs = append(node.SubIFDs[:n], node.SubIFDs[n+1:]...)
+}
+
+// Remove nodes with no fields, which are prohibited by the TIFF spec (1992),
+// Secton 2: TIFF Structure. Image File Directory. "There must be at least 1 IFD
+// in a TIFF file and each IFD must have at least one entry." Returns the modified
+// node, or nil if it contains no fields.
+func (node *IFDNode) DeleteEmptyIFDs() *IFDNode {
+	for i := 0; i < len(node.SubIFDs); i++ {
+		node.SubIFDs[i].Node = node.SubIFDs[i].Node.DeleteEmptyIFDs()
+		if node.SubIFDs[i].Node == nil {
+			node.DeleteSubIFD(i)
+			i-- // Process this index again, it will now refer to the next subIFD.
+		}
+	}
+	if len(node.Fields) == 0 {
+		if node.Next == nil {
+			return nil
+		}
+		return node.Next.DeleteEmptyIFDs()
+	}
+	if node.Next != nil {
+		node.Next = node.Next.DeleteEmptyIFDs()
+	}
+	return node
+}
