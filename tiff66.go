@@ -1292,6 +1292,8 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 		space = Olympus1Space
 	case bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix):
 		space = Olympus1Space
+	case bytes.HasPrefix(buf[pos:], olympus1CLabelPrefix):
+		space = Olympus1Space
 	case bytes.HasPrefix(buf[pos:], panasonic1Label):
 		space = Panasonic1Space
 
@@ -1640,13 +1642,16 @@ const olympus1CameraSettingsIFD = 0x2020
 const olympus1RawDevelopmentIFD = 0x2030
 const olympus1RawDev2IFD = 0x2031
 const olympus1ImageProcessingIFD = 0x2040
-const olympus1FocusInfoIFD = 0x2050
+const olympus1FocusInfo = 0x2050
 
 var olympus1ALabelPrefix = []byte("OLYMP\000") // followed by 2 more bytes
 const olympus1ALabelLen uint32 = 8
 
 var olympus1BLabelPrefix = []byte("OLYMPUS\000II") // followed by 2 more bytes
 const olympus1BLabelLen uint32 = 12
+
+var olympus1CLabelPrefix = []byte("SONY PI\000") // followed by 4 more bytes
+const olympus1CLabelLen uint32 = 12
 
 // SpaceRec for Olympus1 maker notes.
 type Olympus1SpaceRec struct {
@@ -1673,7 +1678,38 @@ func (rec *Olympus1SpaceRec) nodeSize(node IFDNode) uint32 {
 
 func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
 	// SubIFDs.
-	if field.Type == IFD || field.Tag == olympus1EquipmentIFD || field.Tag == olympus1CameraSettingsIFD || field.Tag == olympus1RawDevelopmentIFD || field.Tag == olympus1RawDev2IFD || field.Tag == olympus1ImageProcessingIFD || field.Tag == olympus1FocusInfoIFD {
+	if field.Type == IFD || field.Tag == olympus1EquipmentIFD || field.Tag == olympus1CameraSettingsIFD || field.Tag == olympus1RawDevelopmentIFD || field.Tag == olympus1RawDev2IFD || field.Tag == olympus1ImageProcessingIFD || field.Tag == olympus1FocusInfo {
+		if field.Tag == olympus1FocusInfo && field.Type == UNDEFINED {
+			// Some camera models make this is an IFD, but in others it's just an array of data. Make a guess.
+			// The field size is often just the tableEntrySize times the number of entries
+			// in the table. I.e., it omits the table overhead and the external data.
+			if field.Size() < tableEntrySize {
+				// Too small to be an IFD.
+				return nil, nil
+			}
+			data := field.Data
+			entries := order.Uint16(data)
+			if field.Size() < uint32(entries)*tableEntrySize {
+				// Field is too small to be an IFD with the specified number of fields.
+				return nil, nil
+			}
+			end := dataPos + tableSize(entries)
+			if end < dataPos || end > uint32(len(buf)) {
+				// IFD with specified number of fields would run past end of buffer.
+				return nil, nil
+			}
+			check := uint16(3) // Check the types of the first fields, allow for slightly damaged IFDs.
+			if check > entries {
+				check = entries
+			}
+			for i := uint16(0); i < check; i++ {
+				typ := Type(order.Uint16(data[2+i*tableEntrySize+2:]))
+				if typ == 0 || typ > IFD {
+					// Not an offficial data type: probably not an IFD field.
+					return nil, nil
+				}
+			}
+		}
 		subspace := Olympus1Space
 		switch field.Tag {
 		case olympus1EquipmentIFD:
@@ -1686,7 +1722,7 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			subspace = Olympus1RawDev2Space
 		case olympus1ImageProcessingIFD:
 			subspace = Olympus1ImageProcessingSpace
-		case olympus1FocusInfoIFD:
+		case olympus1FocusInfo:
 			subspace = Olympus1FocusInfoSpace
 		}
 		var sub SubIFD
@@ -1716,6 +1752,10 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 		tiff := buf[pos:]
 		node.Order = binary.LittleEndian
 		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
+	} else if bytes.HasPrefix(buf[pos:], olympus1CLabelPrefix) {
+		rec.label = append([]byte{}, buf[pos:pos+olympus1CLabelLen]...)
+		// Offsets are relative to start of buf.
+		return node.genericGetIFDTreeIter(buf, pos+olympus1CLabelLen, ifdPositions)
 	} else {
 		// Shouldn't reach this point if we already know it's an Olympus1SpaceRec.
 		return errors.New("Invalid label for Olympus1 maker note")
@@ -1724,10 +1764,10 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 
 func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	copy(buf[pos:], rec.label)
-	if uint32(len(rec.label)) == olympus1ALabelLen {
+	if bytes.HasPrefix(rec.label, olympus1ALabelPrefix) || bytes.HasPrefix(rec.label, olympus1CLabelPrefix) {
 		pos += uint32(len(rec.label))
 		return node.genericPutIFDTree(buf, pos)
-	} else if uint32(len(rec.label)) == olympus1BLabelLen {
+	} else if bytes.HasPrefix(rec.label, olympus1BLabelPrefix) {
 		makerBuf := buf[pos:]
 		next, err := node.genericPutIFDTree(makerBuf, olympus1BLabelLen)
 		if err != nil {
@@ -1736,7 +1776,7 @@ func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (u
 			return pos + next, nil
 		}
 	} else {
-		return 0, errors.New("Unexpected Olympus label length")
+		return 0, errors.New("Unexpected Olympus label")
 	}
 }
 
