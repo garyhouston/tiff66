@@ -1086,6 +1086,19 @@ func recurseSubIFDs(buf []byte, order binary.ByteOrder, ifdPositions posMap, fie
 	return subIFDs, err
 }
 
+// Given a buffer pointing to a an IFD entry count, guess the byte
+// order of the IFD. The number of entries is usually small,
+// usually less than 256.
+func detectByteOrder(buf []byte) binary.ByteOrder {
+	big := binary.BigEndian.Uint16(buf)
+	little := binary.LittleEndian.Uint16(buf)
+	if little < big {
+		return binary.LittleEndian
+	} else {
+		return binary.BigEndian
+	}
+}
+
 // SpaceRec with no special processing.
 type GenericSpaceRec struct {
 	space TagSpace
@@ -1542,14 +1555,8 @@ func (rec *Nikon2SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifd
 		node.Order = order
 		return node.genericGetIFDTreeIter(tiff, pos, ifdPositions)
 	} else {
-		// Don't assume the endianness is the same as the Exif
-		// block. Can work it out by assuming that the number
-		// of tags is less than 255.
-		if buf[pos] == 0 {
-			node.Order = binary.BigEndian
-		} else {
-			node.Order = binary.LittleEndian
-		}
+		// Byte order may differ from Exif block.
+		node.Order = detectByteOrder(buf[pos:])
 		return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
 	}
 }
@@ -1744,6 +1751,8 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	if bytes.HasPrefix(buf[pos:], olympus1ALabelPrefix) {
 		rec.label = append([]byte{}, buf[pos:pos+olympus1ALabelLen]...)
+		// Byte order varies by camera model, and may differ from Exif order.
+		node.Order = detectByteOrder(buf[pos:])
 		// Offsets are relative to start of buf.
 		return node.genericGetIFDTreeIter(buf, pos+olympus1ALabelLen, ifdPositions)
 	} else if bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix) {
@@ -1754,6 +1763,8 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
 	} else if bytes.HasPrefix(buf[pos:], olympus1CLabelPrefix) {
 		rec.label = append([]byte{}, buf[pos:pos+olympus1CLabelLen]...)
+		// Byte order varies by camera model, and may differ from Exif order.
+		node.Order = detectByteOrder(buf[pos:])
 		// Offsets are relative to start of buf.
 		return node.genericGetIFDTreeIter(buf, pos+olympus1CLabelLen, ifdPositions)
 	} else {
