@@ -1309,6 +1309,8 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 		space = Olympus1Space
 	case bytes.HasPrefix(buf[pos:], olympus1DLabelPrefix):
 		space = Olympus1Space
+	case bytes.HasPrefix(buf[pos:], olympus1ELabelPrefix):
+		space = Olympus1Space
 	case bytes.HasPrefix(buf[pos:], panasonic1Label):
 		space = Panasonic1Space
 
@@ -1667,6 +1669,10 @@ const olympus1CLabelLen uint32 = 12
 var olympus1DLabelPrefix = []byte("PREMI\000") // followed by 2 more bytes
 const olympus1DLabelLen uint32 = 8
 
+// Various Premier models, and rebranded versions.
+var olympus1ELabelPrefix = []byte("CAMER\000") // followed by 2 more bytes
+const olympus1ELabelLen uint32 = 8
+
 // SpaceRec for Olympus1 maker notes.
 type Olympus1SpaceRec struct {
 	// The maker note header/label varies, but the tags are
@@ -1783,6 +1789,12 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 		node.Order = binary.LittleEndian
 		// Offsets are relative to start of buf.
 		return node.genericGetIFDTreeIter(buf, pos+olympus1DLabelLen, ifdPositions)
+	} else if bytes.HasPrefix(buf[pos:], olympus1ELabelPrefix) {
+		rec.label = append([]byte{}, buf[pos:pos+olympus1ELabelLen]...)
+		// Seems to be always little endian, but there are quite a few models.
+		node.Order = detectByteOrder(buf[pos:])
+		// Offsets are relative to start of buf.
+		return node.genericGetIFDTreeIter(buf, pos+olympus1ELabelLen, ifdPositions)
 	} else {
 		// Shouldn't reach this point if we already know it's an Olympus1SpaceRec.
 		return errors.New("Invalid label for Olympus1 maker note")
@@ -1791,7 +1803,7 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 
 func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	copy(buf[pos:], rec.label)
-	if bytes.HasPrefix(rec.label, olympus1ALabelPrefix) || bytes.HasPrefix(rec.label, olympus1CLabelPrefix) || bytes.HasPrefix(rec.label, olympus1DLabelPrefix) {
+	if bytes.HasPrefix(rec.label, olympus1ALabelPrefix) || bytes.HasPrefix(rec.label, olympus1CLabelPrefix) || bytes.HasPrefix(rec.label, olympus1DLabelPrefix) || bytes.HasPrefix(rec.label, olympus1ELabelPrefix) {
 		pos += uint32(len(rec.label))
 		return node.genericPutIFDTree(buf, pos)
 	} else if bytes.HasPrefix(rec.label, olympus1BLabelPrefix) {
