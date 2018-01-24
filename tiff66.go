@@ -1696,6 +1696,10 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 			}
 			data := field.Data
 			entries := order.Uint16(data)
+			if entries == 0 {
+				// IFD should have entries.
+				return nil, nil
+			}
 			if field.Size() < uint32(entries)*tableEntrySize {
 				// Field is too small to be an IFD with the specified number of fields.
 				return nil, nil
