@@ -1301,26 +1301,23 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 		space = Nikon1Space
 	case bytes.HasPrefix(buf[pos:], nikon2LabelPrefix):
 		space = Nikon2Space
-	case bytes.HasPrefix(buf[pos:], olympus1ALabelPrefix):
-		space = Olympus1Space
-	case bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix):
-		space = Olympus1Space
-	case bytes.HasPrefix(buf[pos:], olympus1CLabelPrefix):
-		space = Olympus1Space
-	case bytes.HasPrefix(buf[pos:], olympus1DLabelPrefix):
-		space = Olympus1Space
-	case bytes.HasPrefix(buf[pos:], olympus1ELabelPrefix):
-		space = Olympus1Space
-	case bytes.HasPrefix(buf[pos:], panasonic1Label):
-		space = Panasonic1Space
-
+	default:
+		for i := range olympus1Labels {
+			if bytes.HasPrefix(buf[pos:], olympus1Labels[i].prefix) {
+				space = Olympus1Space
+			}
+		}
 		// If no maker note label was recognized above, assume
 		// the maker note is appropriate for the camera make
 		// and/or model.
-	case strings.HasPrefix(lcMake, "nikon"):
-		space = Nikon2Space
-	case strings.HasPrefix(lcMake, "canon"):
-		space = Canon1Space
+		if space == TagSpace(0) {
+			switch {
+			case strings.HasPrefix(lcMake, "nikon"):
+				space = Nikon2Space
+			case strings.HasPrefix(lcMake, "canon"):
+				space = Canon1Space
+			}
+		}
 	}
 	return space
 }
@@ -1655,32 +1652,29 @@ const olympus1RawDev2IFD = 0x2031
 const olympus1ImageProcessingIFD = 0x2040
 const olympus1FocusInfo = 0x2050
 
-var olympus1ALabelPrefix = []byte("OLYMP\000") // followed by 2 more bytes
-const olympus1ALabelLen uint32 = 8
+// The Olympus1 maker note header/label varies, but the tags are
+// compatible. The older type is decoded with offsets relative to the
+// start of the Tiff block and starts with "OLYMP\0" or other labels;
+// the newer type is decoded relative to the start of the maker note
+// and starts with ""OLYMPUS\000II".
 
-var olympus1BLabelPrefix = []byte("OLYMPUS\000II") // followed by 2 more bytes
-const olympus1BLabelLen uint32 = 12
-
-// Sony DSC-S650 etc.
-var olympus1CLabelPrefix = []byte("SONY PI\000") // followed by 4 more bytes
-const olympus1CLabelLen uint32 = 12
-
-// Sony DSC-S45, DSC-S500
-var olympus1DLabelPrefix = []byte("PREMI\000") // followed by 2 more bytes
-const olympus1DLabelLen uint32 = 8
-
-// Various Premier models, and rebranded versions.
-var olympus1ELabelPrefix = []byte("CAMER\000") // followed by 2 more bytes
-const olympus1ELabelLen uint32 = 8
+var olympus1Labels = []struct {
+	prefix   []byte // Identifying prefix of maker note label.
+	length   uint32 // Full length of maker note label.
+	relative bool   // True if offsets are relative to the start of the maker note, instead of the entire Tiff block.
+}{
+	{[]byte("OLYMP\000"), 8, false},     // Many Olympus models.
+	{[]byte("OLYMPUS\000II"), 12, true}, // Many Olympus models.
+	{[]byte("SONY PI\000"), 12, false},  // Sony DSC-S650 etc.
+	{[]byte("PREMI\000"), 8, false},     // Sony DSC-S45, DSC-S500.
+	{[]byte("CAMER\000"), 8, false},     // Various Premier models, sometimes rebranded.
+	{[]byte("MINOL\000"), 8, false},     // Minolta DiMAGE E323.
+}
 
 // SpaceRec for Olympus1 maker notes.
 type Olympus1SpaceRec struct {
-	// The maker note header/label varies, but the tags are
-	// compatible. The older type is decoded with offsets relative
-	// to the start of buf and starts with "OLYMP\0", while the
-	// newer type is decoded relative to the start of the maker
-	// note and starts with ""OLYMPUS\0".  E-M1: "OLYMPUS\0II"
-	label []byte
+	label    []byte
+	relative bool // True if offsets relative to start of maker note, instead of entire Tiff block.
 }
 
 func (*Olympus1SpaceRec) GetSpace() TagSpace {
@@ -1766,56 +1760,41 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 }
 
 func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
-	if bytes.HasPrefix(buf[pos:], olympus1ALabelPrefix) {
-		rec.label = append([]byte{}, buf[pos:pos+olympus1ALabelLen]...)
-		// Byte order varies by camera model, and may differ from Exif order.
-		node.Order = detectByteOrder(buf[pos:])
-		// Offsets are relative to start of buf.
-		return node.genericGetIFDTreeIter(buf, pos+olympus1ALabelLen, ifdPositions)
-	} else if bytes.HasPrefix(buf[pos:], olympus1BLabelPrefix) {
-		// Offsets are relative to start of maker note.
-		rec.label = append([]byte{}, buf[pos:pos+olympus1BLabelLen]...)
-		tiff := buf[pos:]
-		node.Order = binary.LittleEndian
-		return node.genericGetIFDTreeIter(tiff, olympus1BLabelLen, ifdPositions)
-	} else if bytes.HasPrefix(buf[pos:], olympus1CLabelPrefix) {
-		rec.label = append([]byte{}, buf[pos:pos+olympus1CLabelLen]...)
-		// Byte order varies by camera model, and may differ from Exif order.
-		node.Order = detectByteOrder(buf[pos:])
-		// Offsets are relative to start of buf.
-		return node.genericGetIFDTreeIter(buf, pos+olympus1CLabelLen, ifdPositions)
-	} else if bytes.HasPrefix(buf[pos:], olympus1DLabelPrefix) {
-		rec.label = append([]byte{}, buf[pos:pos+olympus1DLabelLen]...)
-		node.Order = binary.LittleEndian
-		// Offsets are relative to start of buf.
-		return node.genericGetIFDTreeIter(buf, pos+olympus1DLabelLen, ifdPositions)
-	} else if bytes.HasPrefix(buf[pos:], olympus1ELabelPrefix) {
-		rec.label = append([]byte{}, buf[pos:pos+olympus1ELabelLen]...)
-		// Seems to be always little endian, but there are quite a few models.
-		node.Order = detectByteOrder(buf[pos:])
-		// Offsets are relative to start of buf.
-		return node.genericGetIFDTreeIter(buf, pos+olympus1ELabelLen, ifdPositions)
-	} else {
-		// Shouldn't reach this point if we already know it's an Olympus1SpaceRec.
-		return errors.New("Invalid label for Olympus1 maker note")
+	for i := range olympus1Labels {
+		if bytes.HasPrefix(buf[pos:], olympus1Labels[i].prefix) {
+			rec.label = append([]byte{}, buf[pos:pos+olympus1Labels[i].length]...)
+			// Byte order varies by camera model, and may differ from Exif order.
+			node.Order = detectByteOrder(buf[pos+olympus1Labels[i].length:])
+			if olympus1Labels[i].relative {
+				// Offsets are relative to start of maker note.
+				tiff := buf[pos:]
+				rec.relative = true
+				return node.genericGetIFDTreeIter(tiff, olympus1Labels[i].length, ifdPositions)
+			} else {
+				// Offsets are relative to start of buffer.
+				rec.relative = false
+				return node.genericGetIFDTreeIter(buf, pos+olympus1Labels[i].length, ifdPositions)
+			}
+		}
 	}
+	// Shouldn't reach this point if we already know it's an Olympus1SpaceRec.
+	return errors.New("Invalid label for Olympus1 maker note")
 }
 
 func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	copy(buf[pos:], rec.label)
-	if bytes.HasPrefix(rec.label, olympus1ALabelPrefix) || bytes.HasPrefix(rec.label, olympus1CLabelPrefix) || bytes.HasPrefix(rec.label, olympus1DLabelPrefix) || bytes.HasPrefix(rec.label, olympus1ELabelPrefix) {
-		pos += uint32(len(rec.label))
-		return node.genericPutIFDTree(buf, pos)
-	} else if bytes.HasPrefix(rec.label, olympus1BLabelPrefix) {
+	labelLen := uint32(len(rec.label))
+	if rec.relative {
 		makerBuf := buf[pos:]
-		next, err := node.genericPutIFDTree(makerBuf, olympus1BLabelLen)
+		next, err := node.genericPutIFDTree(makerBuf, labelLen)
 		if err != nil {
 			return 0, err
 		} else {
 			return pos + next, nil
 		}
 	} else {
-		return 0, errors.New("Unexpected Olympus label")
+		pos += uint32(labelLen)
+		return node.genericPutIFDTree(buf, pos)
 	}
 }
 
