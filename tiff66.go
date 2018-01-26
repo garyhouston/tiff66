@@ -1301,6 +1301,8 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 		space = Nikon1Space
 	case bytes.HasPrefix(buf[pos:], nikon2LabelPrefix):
 		space = Nikon2Space
+	case bytes.HasPrefix(buf[pos:], panasonic1Label):
+		space = Panasonic1Space
 	default:
 		for i := range olympus1Labels {
 			if bytes.HasPrefix(buf[pos:], olympus1Labels[i].prefix) {
