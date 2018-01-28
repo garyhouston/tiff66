@@ -683,7 +683,7 @@ const tableEntrySize = 12
 
 // Return the serialized size of a basic IFD table.
 func tableSize(numFields uint16) uint32 {
-	return tableOverhead + uint32(numFields*tableEntrySize)
+	return tableOverhead + uint32(numFields)*tableEntrySize
 }
 
 func (node IFDNode) TableSize() uint32 {
@@ -861,8 +861,8 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 	}
 	order := node.Order
 	// Whether to process the pointer at the end of the IFD that points to the next one.
-	// Panasonic maker notes omit the pointer.
-	processNext := space != Panasonic1Space
+	// Maker notes may omit the pointer (e.g., Panasonic, Sony) and aren't likely to be used.
+	processNext := !node.IsMakerNote()
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
 	var err error
 	if entries == 0 {
@@ -870,8 +870,8 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		// a Next pointer.
 		err = multierror.Append(err, fmt.Errorf("%s IFD at %d doesn't contain any fields", space.Name(), ifdpos))
 	}
-	tableSize := tableSize(entries)
-	if pos+tableSize < pos || pos+tableSize > bufsize {
+	tabsize := tableSize(entries)
+	if pos+tabsize < pos || pos+tabsize > bufsize {
 		processNext = false
 		// The table extends past the end of the buffer:
 		// examine the table for possibly valid fields - tags
@@ -904,7 +904,7 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		if size > 4 {
 			dataPos = order.Uint32(buf[dataPos:])
 			if dataPos+size < dataPos || dataPos+size > bufsize {
-				err = multierror.Append(err, fmt.Errorf("Skipping field %d with tag %d in %s IFD at %d: data past end of input", i, field.Tag, space.Name(), ifdpos))
+				err = multierror.Append(err, fmt.Errorf("Skipping field %d with tag %d (0x%0X) in %s IFD at %d: data at %d past end of input", i, field.Tag, field.Tag, space.Name(), ifdpos, dataPos))
 				continue
 			}
 		}
@@ -925,6 +925,9 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		next = order.Uint32(buf[pos:])
 	}
 	if next > 0 {
+		if next >= uint32(len(buf)) {
+			return multierror.Append(err, fmt.Errorf("Next pointer %d in %s IFD at %d past end of input", next, space.Name(), ifdpos))
+		}
 		var nextSpace TagSpace
 		if space == ExifSpace {
 			// The next IFD after an Exif IFD is a thumbnail
@@ -957,7 +960,7 @@ const (
 	MPFIndexSpace                TagSpace = 5 // Multi-Picture Format.
 	MPFAttributeSpace            TagSpace = 6
 	Canon1Space                  TagSpace = 7
-	Fujifilm1Space               TagSpace = 20 // last
+	Fujifilm1Space               TagSpace = 20
 	Nikon1Space                  TagSpace = 8
 	Nikon2Space                  TagSpace = 9
 	Nikon2PreviewSpace           TagSpace = 10
@@ -970,6 +973,7 @@ const (
 	Olympus1ImageProcessingSpace TagSpace = 17
 	Olympus1FocusInfoSpace       TagSpace = 18
 	Panasonic1Space              TagSpace = 19
+	Sony1Space                   TagSpace = 21 // last
 )
 
 // Return the name of a tag namespace.
@@ -1015,6 +1019,8 @@ func (space TagSpace) Name() string {
 		return "Olympus1FocusInfo"
 	case Panasonic1Space:
 		return "Panasonic1"
+	case Sony1Space:
+		return "Sony1"
 	case UnknownSpace:
 		return "Unknown"
 	}
@@ -1063,6 +1069,8 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 		return &Olympus1SpaceRec{}
 	case Panasonic1Space:
 		return &Panasonic1SpaceRec{}
+	case Sony1Space:
+		return &Sony1SpaceRec{}
 	default:
 		return &GenericSpaceRec{space: space}
 	}
@@ -1309,6 +1317,15 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 				space = Olympus1Space
 			}
 		}
+		/* incomplete
+		if space == TagSpace(0) {
+			for i := range sony1Labels {
+				if bytes.HasPrefix(buf[pos:], sony1Labels[i]) {
+					space = Sony1Space
+				}
+			}
+		}
+		*/
 		// If no maker note label was recognized above, assume
 		// the maker note is appropriate for the camera make
 		// and/or model.
@@ -1405,9 +1422,7 @@ func (*Fujifilm1SpaceRec) IsMakerNote() bool {
 }
 
 var fujifilm1Label = []byte("FUJIFILM")
-
-// GE E1255W has a Fujifilm maker note with a different label.
-var generaleLabel = []byte("GENERALE")
+var generaleLabel = []byte("GENERALE") // GE E1255W
 
 func (rec *Fujifilm1SpaceRec) nodeSize(node IFDNode) uint32 {
 	// Label, IFD position, and IFD.
@@ -1421,22 +1436,20 @@ func (*Fujifilm1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPosit
 func (rec *Fujifilm1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	// Offsets are relative to start of the makernote.
 	tiff := buf[pos:]
-	var lablen int
 	if bytes.HasPrefix(tiff, fujifilm1Label) {
-		lablen = len(fujifilm1Label)
+		rec.label = append([]byte{}, fujifilm1Label...)
 	} else if bytes.HasPrefix(tiff, generaleLabel) {
-		lablen = len(generaleLabel)
+		rec.label = append([]byte{}, generaleLabel...)
 	} else {
 		// Shouldn't reach this point if we already know it's a Fujifilm1SpaceRec.
 		return errors.New("Invalid label for Fujifilm1 maker note")
 	}
-	rec.label = append([]byte{}, tiff[:lablen]...)
 	// Must be read as little-endian, even if the Exif block is
 	// big endian (as in Leica digilux 4.3).
 	node.Order = binary.LittleEndian
 	// Only the 2nd half of the TIFF header is present, the position
 	// of the IFD.
-	pos = node.Order.Uint32(tiff[lablen:])
+	pos = node.Order.Uint32(tiff[len(rec.label):])
 	return node.genericGetIFDTreeIter(tiff, pos, ifdPositions)
 }
 
@@ -1841,6 +1854,59 @@ func (*Panasonic1SpaceRec) GetImageData() []ImageData {
 	return nil
 }
 
+// SpaceRec for Sony1 maker notes.
+type Sony1SpaceRec struct {
+	label []byte
+}
+
+func (*Sony1SpaceRec) GetSpace() TagSpace {
+	return Sony1Space
+}
+
+func (*Sony1SpaceRec) IsMakerNote() bool {
+	return true
+}
+
+var sony1Labels = [][]byte{
+	[]byte("SONY CAM \000\000\000"),    // Includes various Sony camcorders.
+	[]byte("SONY DSC \000\000\000"),    // Includes various Sony still cameras.
+	[]byte("\000\000SONY PIC\000\000"), // Sony DSC-TF1.
+	[]byte("SONY MOBILE\000"),          // Sony Xperia.
+	[]byte("VHAB     \000\000\000"),    // Hasselblad versions of Sony cameras.
+}
+
+func (rec *Sony1SpaceRec) nodeSize(node IFDNode) uint32 {
+	return uint32(len(rec.label)) + node.genericSize()
+}
+
+func (*Sony1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
+	return nil, nil
+}
+
+func (rec *Sony1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	for _, label := range sony1Labels {
+		if bytes.HasPrefix(buf[pos:], label) {
+			rec.label = append([]byte{}, label...)
+			ifdpos := pos + uint32(len(rec.label))
+			// Byte order varies by camera model, and may differ from Exif order.
+			node.Order = detectByteOrder(buf[ifdpos:])
+			return node.genericGetIFDTreeIter(buf, ifdpos, ifdPositions)
+		}
+	}
+	// Shouldn't reach this point if we already know it's a Sony1SpaceRec.
+	return errors.New("Invalid label for Sony1 maker note")
+}
+
+func (rec *Sony1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	copy(buf[pos:], rec.label)
+	pos += uint32(len(rec.label))
+	return node.genericPutIFDTree(buf, pos)
+}
+
+func (*Sony1SpaceRec) GetImageData() []ImageData {
+	return nil
+}
+
 // Put image data from node, if any, into buf at pos. Return next data
 // position in buf and a mapping from the offset field tag to an
 // encoded array of offsets where image data was placed.
@@ -2065,7 +2131,7 @@ func (node *IFDNode) fixIFD() {
 				}
 			}
 		} else if field.Type == ASCII {
-			if field.Data[field.Count-1] != 0 {
+			if field.Count > 0 && field.Data[field.Count-1] != 0 {
 				field.Count++
 				newData := make([]byte, field.Count)
 				copy(newData, field.Data)
