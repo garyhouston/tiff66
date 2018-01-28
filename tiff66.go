@@ -859,8 +859,7 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 	}
 	order := node.Order
 	// Whether to process the pointer at the end of the IFD that points to the next one.
-	// Maker notes may omit the pointer (e.g., Panasonic, Sony) and aren't likely to be used.
-	processNext := !node.IsMakerNote()
+	processNext := true
 	entries := order.Uint16(buf[pos:]) // IFD entry count.
 	var err error
 	if entries == 0 {
@@ -918,32 +917,50 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		fields = append(fields, field)
 	}
 	node.Fields = fields
-	next := uint32(0)
 	if processNext {
-		next = order.Uint32(buf[pos:])
-	}
-	if next > 0 {
-		if next >= uint32(len(buf)) {
-			return multierror.Append(err, fmt.Errorf("Next pointer %d in %s IFD at %d past end of input", next, space.Name(), ifdpos))
-		}
-		var nextSpace TagSpace
-		if space == ExifSpace {
-			// The next IFD after an Exif IFD is a thumbnail
-			// encoded as TIFF.
-			nextSpace = TIFFSpace
-		} else if space == MPFIndexSpace {
-			nextSpace = MPFAttributeSpace
-		} else {
-			// Assume the next IFD is the same type.
-			nextSpace = space
-		}
-		var nextErr error
-		node.Next, nextErr = getIFDTreeIter(buf, order, next, NewSpaceRec(nextSpace), ifdPositions)
-		if nextErr != nil {
-			err = multierror.Append(err, nextErr)
+		footerErr := node.SpaceRec.getFooter(node, buf, pos, ifdPositions)
+		if footerErr != nil {
+			err = multierror.Append(err, footerErr)
 		}
 	}
 	return err
+}
+
+// Generic processing of the "next" pointer at the end of an IFD. Modifies node.
+func (node *IFDNode) genericGetFooter(buf []byte, pos uint32, nextSpace TagSpace, ifdPositions posMap) error {
+	buflen := uint32(len(buf))
+	space := node.GetSpace()
+	if pos+4 < pos || pos+4 > buflen {
+		// This shouldn't happen, since table size is checked earlier.
+		return fmt.Errorf("Can't read Next pointer in %s IFD; past end of input", space.Name())
+	}
+	next := node.Order.Uint32(buf[pos:])
+	if next > 0 {
+		if next >= buflen {
+			return fmt.Errorf("Next pointer %d in %s IFD past end of input", next, space.Name())
+		}
+		var err error
+		node.Next, err = getIFDTreeIter(buf, node.Order, next, NewSpaceRec(nextSpace), ifdPositions)
+		return err
+	}
+	return nil
+}
+
+// Similar to genericGetFooter, but additionally add an error if a next IFD is found.
+func (node *IFDNode) unexpectedFooter(buf []byte, pos uint32, ifdPositions posMap) error {
+	buflen := uint32(len(buf))
+	space := node.GetSpace()
+	if pos+4 < pos || pos+4 > buflen {
+		// This shouldn't happen, since table size is checked earlier.
+		return fmt.Errorf("Can't read Next pointer in %s IFD; past end of input", space.Name())
+	}
+	next := node.Order.Uint32(buf[pos:])
+	if next != 0 {
+		err := fmt.Errorf("Unexpected pointer %d to next IFD in %s IFD", next, space.Name())
+		// Unexpected, but process it anyway.
+		return multierror.Append(err, node.genericGetFooter(buf, pos, space, ifdPositions))
+	}
+	return nil
 }
 
 // IFD Tag namespace.
@@ -1032,13 +1049,17 @@ func (space TagSpace) ByteOrder(deforder binary.ByteOrder) binary.ByteOrder {
 	return deforder
 }
 
-// A interface for node-space-specific functionality.
+// An interface for node-space-specific functionality.
 type SpaceRec interface {
 	GetSpace() TagSpace
 	IsMakerNote() bool
 	nodeSize(IFDNode) uint32
 	takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error)
 	getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error
+	// Called by getIFDTree to process the part of the IFD
+	// following the field entries, usually 4 bytes with the next
+	// IFD or zero. The next IFD will be read recursively.
+	getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error
 	putIFDTree(IFDNode, []byte, uint32) (uint32, error)
 	// Return ImageData, which can be the arrays of scan data that may be
 	// found in TIFF nodes, or any other data that's specified with
@@ -1057,6 +1078,8 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 		return &Canon1SpaceRec{}
 	case Fujifilm1Space:
 		return &Fujifilm1SpaceRec{}
+	case MPFIndexSpace:
+		return &MPFIndexSpaceRec{}
 	case Nikon1Space:
 		return &Nikon1SpaceRec{}
 	case Nikon2Space:
@@ -1070,6 +1093,11 @@ func NewSpaceRec(space TagSpace) SpaceRec {
 	case Sony1Space:
 		return &Sony1SpaceRec{}
 	default:
+		// Don't expect Next pointers to be present in any of the
+		// known IFDs, but permit them in unknown IFDs.
+		if space != UnknownSpace {
+			return &NoNextSpaceRec{space: space}
+		}
 		return &GenericSpaceRec{space: space}
 	}
 }
@@ -1123,11 +1151,60 @@ func (*GenericSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPos
 	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
 }
 
+func (rec *GenericSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// Assume any following IFD has the same space as the current.
+	return node.genericGetFooter(buf, pos, rec.space, ifdPositions)
+}
+
 func (*GenericSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	return node.genericPutIFDTree(buf, pos)
 }
 
 func (*GenericSpaceRec) GetImageData() []ImageData {
+	return nil
+}
+
+// Similar to GenericSpaceRec, but don't process Next pointers: not
+// expected to be present for these spaces.
+type NoNextSpaceRec struct {
+	space TagSpace
+}
+
+func (rec *NoNextSpaceRec) GetSpace() TagSpace {
+	return rec.space
+}
+
+func (*NoNextSpaceRec) IsMakerNote() bool {
+	return false
+}
+
+func (*NoNextSpaceRec) nodeSize(node IFDNode) uint32 {
+	return node.genericSize()
+}
+
+func (rec *NoNextSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
+	// Process a field of type IFD: these declare a subIFD, and
+	// can be potentially found in any IFD.  Assume the subIFD has
+	// the same space as the current IFD.
+	if field.Type == IFD {
+		return recurseSubIFDs(buf, order, ifdPositions, field, NewSpaceRec(rec.space))
+	}
+	return nil, nil
+}
+
+func (*NoNextSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
+}
+
+func (rec *NoNextSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
+}
+
+func (*NoNextSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	return node.genericPutIFDTree(buf, pos)
+}
+
+func (*NoNextSpaceRec) GetImageData() []ImageData {
 	return nil
 }
 
@@ -1252,6 +1329,10 @@ func (*TIFFSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositi
 	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
 }
 
+func (*TIFFSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.genericGetFooter(buf, pos, node.GetSpace(), ifdPositions)
+}
+
 func (*TIFFSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	return node.genericPutIFDTree(buf, pos)
 }
@@ -1308,11 +1389,61 @@ func (*ExifSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositi
 	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
 }
 
+func (rec *ExifSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// The next IFD after an Exif IFD is a thumbnail encoded as
+	// TIFF.
+	return node.genericGetFooter(buf, pos, TIFFSpace, ifdPositions)
+}
+
 func (*ExifSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	return node.genericPutIFDTree(buf, pos)
 }
 
 func (*ExifSpaceRec) GetImageData() []ImageData {
+	return nil
+}
+
+// SpaceRec for MPFIndex nodes. Similar to Generic but with specific Next processing.
+type MPFIndexSpaceRec struct {
+	space TagSpace
+}
+
+func (rec *MPFIndexSpaceRec) GetSpace() TagSpace {
+	return rec.space
+}
+
+func (*MPFIndexSpaceRec) IsMakerNote() bool {
+	return false
+}
+
+func (*MPFIndexSpaceRec) nodeSize(node IFDNode) uint32 {
+	return node.genericSize()
+}
+
+func (rec *MPFIndexSpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositions posMap, idx uint16, field Field, dataPos uint32) ([]SubIFD, error) {
+	// Process a field of type IFD: these declare a subIFD, and
+	// can be potentially found in any IFD.  Assume the subIFD has
+	// the same space as the current IFD.
+	if field.Type == IFD {
+		return recurseSubIFDs(buf, order, ifdPositions, field, NewSpaceRec(rec.space))
+	}
+	return nil, nil
+}
+
+func (*MPFIndexSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
+}
+
+func (rec *MPFIndexSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// MPFIndex space may be followd by an MPFAttribute space.
+	return node.genericGetFooter(buf, pos, MPFAttributeSpace, ifdPositions)
+}
+
+func (*MPFIndexSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
+	return node.genericPutIFDTree(buf, pos)
+}
+
+func (*MPFIndexSpaceRec) GetImageData() []ImageData {
 	return nil
 }
 

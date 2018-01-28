@@ -89,6 +89,10 @@ func (*Canon1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPosi
 	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
 }
 
+func (*Canon1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
+}
+
 func (*Canon1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	return node.genericPutIFDTree(buf, pos)
 }
@@ -142,6 +146,10 @@ func (rec *Fujifilm1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, 
 	return node.genericGetIFDTreeIter(tiff, pos, ifdPositions)
 }
 
+func (*Fujifilm1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
+}
+
 func (rec *Fujifilm1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	tiff := buf[pos:]
 	copy(tiff, rec.label)
@@ -183,6 +191,10 @@ func (*Nikon1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPosition
 
 func (*Nikon1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	return node.genericGetIFDTreeIter(buf, pos+uint32(len(nikon1Label)), ifdPositions)
+}
+
+func (*Nikon1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
 }
 
 func (*Nikon1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
@@ -266,6 +278,10 @@ func (rec *Nikon2SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifd
 	}
 }
 
+func (*Nikon2SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
+}
+
 func (rec *Nikon2SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	if len(rec.label) == 0 {
 		// maker note without label or TIFF header.
@@ -338,6 +354,10 @@ func (rec *Nikon2PreviewSpaceRec) takeField(buf []byte, order binary.ByteOrder, 
 
 func (*Nikon2PreviewSpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	return node.genericGetIFDTreeIter(buf, pos, ifdPositions)
+}
+
+func (*Nikon2PreviewSpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
 }
 
 func (*Nikon2PreviewSpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
@@ -485,6 +505,10 @@ func (rec *Olympus1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, i
 	return errors.New("Invalid label for Olympus1 maker note")
 }
 
+func (*Olympus1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	return node.unexpectedFooter(buf, pos, ifdPositions)
+}
+
 func (rec *Olympus1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
 	copy(buf[pos:], rec.label)
 	labelLen := uint32(len(rec.label))
@@ -531,6 +555,11 @@ func (*Panasonic1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPosi
 func (*Panasonic1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
 	// Offsets are relative to start of buf.
 	return node.genericGetIFDTreeIter(buf, pos+uint32(len(panasonic1Label)), ifdPositions)
+}
+
+func (rec *Panasonic1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// Next pointer is generally missing, don't try to read it.
+	return nil
 }
 
 func (*Panasonic1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
@@ -584,6 +613,11 @@ func (rec *Sony1SpaceRec) getIFDTree(node *IFDNode, buf []byte, pos uint32, ifdP
 	}
 	// Shouldn't reach this point if we already know it's a Sony1SpaceRec.
 	return errors.New("Invalid label for Sony1 maker note")
+}
+
+func (rec *Sony1SpaceRec) getFooter(node *IFDNode, buf []byte, pos uint32, ifdPositions posMap) error {
+	// Next pointer is often invalid, don't try to read it.
+	return nil
 }
 
 func (rec *Sony1SpaceRec) putIFDTree(node IFDNode, buf []byte, pos uint32) (uint32, error) {
