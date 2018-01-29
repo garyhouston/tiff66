@@ -28,7 +28,6 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 				space = Olympus1Space
 			}
 		}
-		/* incomplete
 		if space == TagSpace(0) {
 			for i := range sony1Labels {
 				if bytes.HasPrefix(buf[pos:], sony1Labels[i]) {
@@ -36,7 +35,6 @@ func identifyMakerNote(buf []byte, pos uint32, make, model string) TagSpace {
 				}
 			}
 		}
-		*/
 		// If no maker note label was recognized above, assume
 		// the maker note is appropriate for the camera make
 		// and/or model.
