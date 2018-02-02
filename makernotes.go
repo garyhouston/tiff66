@@ -208,7 +208,6 @@ func (*Nikon1SpaceRec) GetImageData() []ImageData {
 // Fields in Nikon2 IFD.
 const nikon2PreviewIFD = 0x11
 const nikon2NikonScanIFD = 0xE10
-const nikon2MakerNoteVersion = 0x1
 
 // SpaceRec for Nikon2 maker notes.
 type Nikon2SpaceRec struct {
@@ -590,6 +589,9 @@ var sony1Labels = [][]byte{
 	[]byte("SONY MOBILE\000"),          // Sony Xperia.
 	[]byte("VHAB     \000\000\000"),    // Hasselblad versions of Sony cameras.
 }
+
+// Fields in Sony1 IFD.
+const sony1PreviewImage = 0x2001
 
 func (rec *Sony1SpaceRec) nodeSize(node IFDNode) uint32 {
 	return uint32(len(rec.label)) + node.genericSize()

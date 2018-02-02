@@ -898,14 +898,29 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		size := field.Size()
 		dataPos := pos
 		pos += 4
-		if size > 4 {
+		if size <= 4 {
+			field.Data = buf[dataPos : dataPos+size]
+		} else {
 			dataPos = order.Uint32(buf[dataPos:])
 			if dataPos+size < dataPos || dataPos+size > bufsize {
-				err = multierror.Append(err, fmt.Errorf("Skipping field %d with tag %d (0x%0X) in %s IFD at %d: data at %d past end of input", i, field.Tag, field.Tag, space.Name(), ifdpos, dataPos))
-				continue
+				if space == Sony1Space && field.Tag == sony1PreviewImage {
+					if field.Type != UNDEFINED {
+						err = multierror.Append(err, fmt.Errorf("Skipping field PreviewImage in Sony1 IFD because wrong type %s", field.Type.Name()))
+						continue
+					}
+					// Field data is outside the current Exif block. Just save the size and position.
+					field.Data = make([]byte, 8)
+					order.PutUint32(field.Data, field.Count)
+					order.PutUint32(field.Data[4:], dataPos)
+					field.Count = 8
+				} else {
+					err = multierror.Append(err, fmt.Errorf("Skipping field %d with tag %d (0x%0X) in %s IFD at %d: data at %d past end of input", i, field.Tag, field.Tag, space.Name(), ifdpos, dataPos))
+					continue
+				}
+			} else {
+				field.Data = buf[dataPos : dataPos+size]
 			}
 		}
-		field.Data = buf[dataPos : dataPos+size]
 		// Space-specific field processing, including subIFD recursion.
 		subIFDs, fieldErr := node.SpaceRec.takeField(buf, order, ifdPositions, i, field, dataPos)
 		if fieldErr != nil {
