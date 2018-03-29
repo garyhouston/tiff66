@@ -416,9 +416,9 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 	if field.Type == IFD || field.Tag == olympus1EquipmentIFD || field.Tag == olympus1CameraSettingsIFD || field.Tag == olympus1RawDevelopmentIFD || field.Tag == olympus1RawDev2IFD || field.Tag == olympus1ImageProcessingIFD || field.Tag == olympus1FocusInfo {
 		if field.Tag == olympus1FocusInfo && field.Type == UNDEFINED {
 			// Some camera models make this is an IFD, but in others it's just an array of data. Make a guess.
-			// The field size is often just the tableEntrySize times the number of entries
+			// The field size is often just the TableEntrySize times the number of entries
 			// in the table. I.e., it omits the table overhead and the external data.
-			if field.Size() < tableEntrySize {
+			if field.Size() < TableEntrySize {
 				// Too small to be an IFD.
 				return nil, nil
 			}
@@ -428,11 +428,11 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 				// IFD should have entries.
 				return nil, nil
 			}
-			if field.Size() < uint32(entries)*tableEntrySize {
+			if field.Size() < uint32(entries)*TableEntrySize {
 				// Field is too small to be an IFD with the specified number of fields.
 				return nil, nil
 			}
-			end := dataPos + tableSize(entries)
+			end := dataPos + TableSize(entries)
 			if end < dataPos || end > uint32(len(buf)) {
 				// IFD with specified number of fields would run past end of buffer.
 				return nil, nil
@@ -442,7 +442,7 @@ func (*Olympus1SpaceRec) takeField(buf []byte, order binary.ByteOrder, ifdPositi
 				check = entries
 			}
 			for i := uint16(0); i < check; i++ {
-				typ := Type(order.Uint16(data[2+i*tableEntrySize+2:]))
+				typ := Type(order.Uint16(data[2+i*TableEntrySize+2:]))
 				if typ == 0 || typ > IFD {
 					// Not an offficial data type: probably not an IFD field.
 					return nil, nil

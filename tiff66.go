@@ -676,21 +676,24 @@ func NewIFDNode(space TagSpace) *IFDNode {
 	return &IFDNode{SpaceRec: NewSpaceRec(space)}
 }
 
-const tableOverhead = 6 // 2 bytes for the entry count and 4 for the position of the next IFD.
-const tableEntrySize = 12
+// TableOverhead is the constant component of the size of a Tiff IFD table.
+const TableOverhead = 6 // 2 bytes for the entry count and 4 for the position of the next IFD.
 
-// Return the serialized size of a basic IFD table.
-func tableSize(numFields uint16) uint32 {
-	return tableOverhead + uint32(numFields)*tableEntrySize
+// TableEntrySize is the size of each entry in a Tiff IFD table.
+const TableEntrySize = 12
+
+// TableSize returns the serialized size of a Tiff IFD table.
+func TableSize(numFields uint16) uint32 {
+	return TableOverhead + uint32(numFields)*TableEntrySize
 }
 
 func (node IFDNode) TableSize() uint32 {
-	return tableSize(uint16(len(node.Fields)))
+	return TableSize(uint16(len(node.Fields)))
 }
 
 // Return the number of IFD table entries that would fit in size bytes.
 func maxTableEntries(size uint32) uint32 {
-	return (size - tableOverhead) / tableEntrySize
+	return (size - TableOverhead) / TableEntrySize
 }
 
 // Serialized size of a node, including its IFD, external data, image
@@ -867,7 +870,7 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		// a Next pointer.
 		err = multierror.Append(err, fmt.Errorf("%s IFD at %d doesn't contain any fields", space.Name(), ifdpos))
 	}
-	tabsize := tableSize(entries)
+	tabsize := TableSize(entries)
 	if pos+tabsize < pos || pos+tabsize > bufsize {
 		processNext = false
 		// The table extends past the end of the buffer:
@@ -875,7 +878,7 @@ func (node *IFDNode) genericGetIFDTreeIter(buf []byte, pos uint32, ifdPositions 
 		// should be increasing in value.
 		entries = uint16(maxTableEntries(bufsize - pos))
 		for i, last := uint16(0), Tag(0); i < entries; i++ {
-			tagpos := pos + 2 + uint32(i*tableEntrySize)
+			tagpos := pos + 2 + uint32(i*TableEntrySize)
 			tag := Tag(order.Uint16(buf[tagpos:]))
 			if tag < last {
 				entries = i
